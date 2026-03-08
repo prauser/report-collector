@@ -1,0 +1,27 @@
+# 환경변수
+config/.env
+*.env
+
+# Telethon 세션
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+
+# PDF 데이터
+data/pdfs/
+
+# IDE
+.vscode/
+.idea/
+
+# 테스트
+.pytest_cache/
+htmlcov/
+.coverage
