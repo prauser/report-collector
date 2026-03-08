@@ -1,5 +1,6 @@
 """STEP 01 - DB 스키마 검증 테스트."""
 import asyncio
+import uuid
 import pytest
 from sqlalchemy import text
 
@@ -98,12 +99,14 @@ async def test_updated_at_trigger(session_factory):
     from db.models import Report
     from datetime import date
 
+    key = f"trigger_test_{uuid.uuid4().hex[:8]}"
+
     async with session_factory() as session:
         stmt = insert(Report).values(
             broker="트리거테스트증권",
             report_date=date(2026, 1, 3),
             title="트리거테스트",
-            title_normalized="trigger_test_001",
+            title_normalized=key,
             source_channel="@test",
             raw_text="raw",
         ).returning(Report)
@@ -116,12 +119,12 @@ async def test_updated_at_trigger(session_factory):
     async with session_factory() as session:
         await session.execute(
             update(Report)
-            .where(Report.title_normalized == "trigger_test_001")
+            .where(Report.title_normalized == key)
             .values(opinion="매수")
         )
         await session.commit()
 
         refreshed = await session.scalar(
-            select(Report).where(Report.title_normalized == "trigger_test_001")
+            select(Report).where(Report.title_normalized == key)
         )
     assert refreshed.updated_at > created_updated_at, "updated_at 트리거 미동작"

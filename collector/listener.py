@@ -6,6 +6,7 @@ from collector.telegram_client import get_client
 from config.settings import settings
 from db.session import AsyncSessionLocal
 from parser.registry import parse_message
+from storage import stock_mapper
 from storage.pdf_archiver import download_pdf
 from storage.report_repo import mark_pdf_failed, update_pdf_info, upsert_report
 
@@ -24,6 +25,14 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
     if parsed is None:
         log.debug("parse_skipped", channel=channel, message_id=message.id)
         return
+
+    # message.date → report_date fallback
+    if parsed.report_date is None:
+        parsed.report_date = message.date.date()
+
+    # stock_code 보완
+    if parsed.stock_name and not parsed.stock_code:
+        parsed.stock_code = await stock_mapper.get_code(parsed.stock_name)
 
     async with AsyncSessionLocal() as session:
         report, action = await upsert_report(session, parsed)

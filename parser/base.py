@@ -14,6 +14,7 @@ class ParsedReport:
     report_date: date | None = None
     analyst: str | None = None
     stock_name: str | None = None
+    title_normalized: str | None = None
     stock_code: str | None = None
     sector: str | None = None
     report_type: str | None = None

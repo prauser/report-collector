@@ -72,3 +72,31 @@ async def download_pdf(report: Report) -> tuple[str | None, int | None]:
     except Exception as e:
         log.warning("pdf_download_failed", url=report.pdf_url, error=str(e))
         return None, None
+
+
+def get_page_count(path: Path) -> int | None:
+    """PDF 페이지 수 추출 (pymupdf 설치 시)."""
+    try:
+        import fitz
+        doc = fitz.open(str(path))
+        count = doc.page_count
+        doc.close()
+        return count
+    except Exception:
+        return None
+
+
+async def download_and_archive(report: Report, session) -> bool:
+    """PDF 다운로드 + page_count 추출 + DB 업데이트."""
+    from storage.report_repo import mark_pdf_failed, update_pdf_info
+
+    rel_path, size_kb = await download_pdf(report)
+    if not rel_path:
+        await mark_pdf_failed(session, report.id)
+        return False
+
+    abs_path = settings.pdf_base_path / rel_path
+    page_count = get_page_count(abs_path)
+
+    await update_pdf_info(session, report.id, rel_path, size_kb, page_count)
+    return True

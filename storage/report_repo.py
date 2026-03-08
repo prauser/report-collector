@@ -10,16 +10,23 @@ from parser.base import ParsedReport
 log = structlog.get_logger(__name__)
 
 
-async def upsert_report(session: AsyncSession, parsed: ParsedReport) -> tuple[Report, str]:
+async def upsert_report(session: AsyncSession, parsed: ParsedReport) -> tuple[Report | None, str]:
     """
     리포트를 upsert.
     Returns: (report, action) where action is 'inserted' | 'updated' | 'skipped'
     """
+    if not parsed.title_normalized:
+        log.warning("missing_title_normalized", title=parsed.title[:50])
+        return None, "skipped"
+
+    def _trunc(val: str | None, maxlen: int) -> str | None:
+        return val[:maxlen] if val else val
+
     values = {
-        "broker": parsed.broker or "Unknown",
+        "broker": _trunc(parsed.broker or parsed.source_channel, 50),
         "report_date": parsed.report_date,
-        "analyst": parsed.analyst,
-        "stock_name": parsed.stock_name,
+        "analyst": _trunc(parsed.analyst, 100),
+        "stock_name": _trunc(parsed.stock_name, 100),
         "title": parsed.title,
         "title_normalized": parsed.title_normalized,
         "stock_code": parsed.stock_code,
@@ -42,12 +49,13 @@ async def upsert_report(session: AsyncSession, parsed: ParsedReport) -> tuple[Re
 
     stmt = insert(Report).values(**values)
 
-    # 충돌 시: pdf_url 등 추가 정보가 있으면 업데이트
+    # 충돌 시: 추가 정보가 있을 때만 업데이트
     update_set = {
         "pdf_url": stmt.excluded.pdf_url,
         "opinion": stmt.excluded.opinion,
         "target_price": stmt.excluded.target_price,
         "raw_text": stmt.excluded.raw_text,
+        "source_channel": stmt.excluded.source_channel,
     }
     stmt = stmt.on_conflict_do_update(
         constraint="uix_report_dedup",
@@ -71,7 +79,7 @@ async def upsert_report(session: AsyncSession, parsed: ParsedReport) -> tuple[Re
         return existing, "skipped"
 
     action = "inserted" if row.created_at == row.updated_at else "updated"
-    log.info("report_upserted", action=action, title=parsed.title[:50], broker=parsed.broker)
+    log.info("report_upserted", action=action, title=parsed.title[:50], broker=values["broker"])
     return row, action
 
 

@@ -8,6 +8,8 @@ asyncpg==0.30.0
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
 
+pykrx==1.2.4
+
 aiohttp==3.11.10
 aiofiles==24.1.0
 

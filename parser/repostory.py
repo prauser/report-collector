@@ -12,20 +12,43 @@ from datetime import date
 from parser.base import BaseParser, ParsedReport
 from parser.normalizer import normalize_broker, normalize_opinion, normalize_title, parse_price
 
+# 증권사명 매칭 (broker 부분에 사용)
+_BROKER_NAMES = (
+    r"(?:미래에셋|한국투자|KB|NH|삼성|하나|메리츠|신한|대신|키움|유진|이베스트|교보|흥국|현대차"
+    r"|SK|LS|BNK|한화|부국|DB|IBK|유안타|하이|토러스|케이프|신영|한양|동부|리딩)"
+    r"(?:증권|투자증권|금융투자)?"
+)
+
 # ▶ 종목명(코드) 제목 - 증권사
 PATTERN_STOCK_REPORT = re.compile(
-    r"[▶►]\s*(.+?)\((\d{6})\)\s+(.+?)\s*[-–]\s*(.+?)$",
+    r"[▶►\*]*\s*(.+?)\((\d{6})\)\s*(.+?)\s*[-–]\s*(.+?)(?:\s*[\[<(]|$)",
     re.MULTILINE,
 )
-# 종목코드 없는 산업/시황 리포트: ▶ [산업] 제목 - 증권사
+# 종목코드 없는 산업/시황 리포트: ▶ 제목 - 증권사
 PATTERN_INDUSTRY_REPORT = re.compile(
-    r"[▶►]\s*(.+?)\s*[-–]\s*(.+?)$",
+    r"[▶►\*]*\s*(.+?)\s*[-–]\s*(" + _BROKER_NAMES + r".*?)(?:\s*[\[<(]|$)",
     re.MULTILINE,
 )
 PATTERN_TARGET_PRICE = re.compile(r"목표가[:\s]*([0-9,]+)\s*원")
+PATTERN_PREV_TARGET = re.compile(
+    r"목표가[:\s]*([0-9,]+)\s*원?\s*(?:→|->|→)+\s*([0-9,]+)\s*원"
+)
 PATTERN_OPINION = re.compile(r"목표가[^\(]*\(([^)]+)\)")
-PATTERN_PDF_URL = re.compile(r"https?://\S+\.pdf\b", re.IGNORECASE)
-PATTERN_URL = re.compile(r"https?://\S+")
+PATTERN_OPINION_STANDALONE = re.compile(r"투자의견[:\s]*(매수|중립|매도|비중확대|비중축소|Trading\s*Buy|BUY|HOLD|SELL)")
+PATTERN_ANALYST = re.compile(r"[-–]\s*\S+(?:증권|투자증권|금융투자)\s+([가-힣]{2,4})$", re.MULTILINE)
+PATTERN_PDF_URL = re.compile(r"https?://\S+\.pdf[^\s)]*", re.IGNORECASE)
+PATTERN_URL = re.compile(r"https?://[^\s)\]>]+")
+
+
+def _clean_broker(raw: str) -> str:
+    """broker 문자열에서 링크/마크다운/불필요 문자 제거 후 정규화."""
+    # 링크, 마크다운, 괄호 이후 제거
+    raw = re.split(r"[\[<(]", raw)[0].strip()
+    # "증권" 뒤의 잡다한 텍스트 제거 (예: "이베스트증권 홍길동" → "이베스트증권")
+    m = re.match(r"(.+?(?:증권|투자증권|금융투자))", raw)
+    if m:
+        raw = m.group(1)
+    return normalize_broker(raw.strip())
 
 
 class RepostoryParser(BaseParser):
@@ -39,6 +62,13 @@ class RepostoryParser(BaseParser):
         if not text:
             return None
 
+        # (Continuing...) 이어짐 메시지는 건너뜀
+        if text.startswith("(Continuing"):
+            return None
+
+        # 마크다운 볼드(**) 제거
+        clean = re.sub(r"\*\*", "", text)
+
         result = ParsedReport(
             title="",
             source_channel=channel,
@@ -48,18 +78,18 @@ class RepostoryParser(BaseParser):
         )
 
         # 종목 리포트 패턴 시도
-        m = PATTERN_STOCK_REPORT.search(text)
+        m = PATTERN_STOCK_REPORT.search(clean)
         if m:
             result.stock_name = m.group(1).strip()
             result.stock_code = m.group(2).strip()
             result.title = m.group(3).strip()
-            result.broker = normalize_broker(m.group(4).strip())
+            result.broker = _clean_broker(m.group(4))
         else:
             # 산업/시황 리포트
-            m2 = PATTERN_INDUSTRY_REPORT.search(text)
+            m2 = PATTERN_INDUSTRY_REPORT.search(clean)
             if m2:
                 result.title = m2.group(1).strip()
-                result.broker = normalize_broker(m2.group(2).strip())
+                result.broker = _clean_broker(m2.group(2))
             else:
                 result.parse_errors.append("제목/증권사 파싱 실패")
 
@@ -68,17 +98,31 @@ class RepostoryParser(BaseParser):
 
         result.title_normalized = normalize_title(result.title) if result.title else None
 
-        # 목표가
-        m_tp = PATTERN_TARGET_PRICE.search(text)
-        if m_tp:
-            result.target_price = parse_price(m_tp.group(1))
+        # 이전 목표가 → 현재 목표가 변경
+        m_prev = PATTERN_PREV_TARGET.search(clean)
+        if m_prev:
+            result.prev_target_price = parse_price(m_prev.group(1))
+            result.target_price = parse_price(m_prev.group(2))
+        else:
+            m_tp = PATTERN_TARGET_PRICE.search(text)
+            if m_tp:
+                result.target_price = parse_price(m_tp.group(1))
 
         # 투자의견
-        m_op = PATTERN_OPINION.search(text)
+        m_op = PATTERN_OPINION.search(clean)
         if m_op:
             result.opinion = normalize_opinion(m_op.group(1).strip())
+        else:
+            m_op2 = PATTERN_OPINION_STANDALONE.search(clean)
+            if m_op2:
+                result.opinion = normalize_opinion(m_op2.group(1).strip())
 
-        # PDF URL
+        # 애널리스트
+        m_analyst = PATTERN_ANALYST.search(clean)
+        if m_analyst:
+            result.analyst = m_analyst.group(1).strip()
+
+        # PDF URL (원문 텍스트에서 추출)
         m_pdf = PATTERN_PDF_URL.search(text)
         if m_pdf:
             result.pdf_url = m_pdf.group(0)

@@ -1,12 +1,14 @@
 """파서 레지스트리 - 채널에 맞는 파서를 자동 선택."""
 from parser.base import BaseParser, ParsedReport
 from parser.repostory import RepostoryParser
+from parser.companyreport import CompanyReportParser
 from parser.generic import GenericParser
 
 _PARSERS: list[BaseParser] = [
     RepostoryParser(),
-    # CompanyReportParser(),  # Step 7에서 추가
+    CompanyReportParser(),
     # SearfinParser(),
+    # CbEqResearchParser(),
     GenericParser(),  # fallback (항상 마지막)
 ]
 
