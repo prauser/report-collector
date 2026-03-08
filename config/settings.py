@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     # 백필
     backfill_limit: int = 1000  # 0 = 전체
 
+    # LLM (Anthropic)
+    anthropic_api_key: str | None = None
+    llm_enabled: bool = True
+    llm_model: str = "claude-haiku-4-5-20251001"
+    llm_max_retries: int = 2
+    llm_timeout: int = 15
+
     # 로깅
     log_level: str = "INFO"
 

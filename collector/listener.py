@@ -7,6 +7,7 @@ from config.settings import settings
 from db.session import AsyncSessionLocal
 from parser.registry import parse_message
 from storage import stock_mapper
+from parser.llm_parser import enrich_with_llm
 from storage.pdf_archiver import download_pdf
 from storage.report_repo import mark_pdf_failed, update_pdf_info, upsert_report
 
@@ -33,6 +34,12 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
     # stock_code 보완
     if parsed.stock_name and not parsed.stock_code:
         parsed.stock_code = await stock_mapper.get_code(parsed.stock_name)
+
+    # LLM Stage 2 보강
+    parsed = await enrich_with_llm(parsed)
+    if parsed is None:
+        log.debug("llm_filtered_non_report", channel=channel, message_id=message.id)
+        return
 
     async with AsyncSessionLocal() as session:
         report, action = await upsert_report(session, parsed)

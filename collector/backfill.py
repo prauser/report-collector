@@ -11,6 +11,7 @@ from db.session import AsyncSessionLocal
 from db.models import Channel
 from parser.registry import parse_message
 from storage import stock_mapper
+from parser.llm_parser import enrich_with_llm
 from storage.report_repo import upsert_report
 from sqlalchemy import select
 
@@ -58,6 +59,11 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
             # stock_code 보완
             if parsed.stock_name and not parsed.stock_code:
                 parsed.stock_code = await stock_mapper.get_code(parsed.stock_name)
+
+            # LLM Stage 2 보강
+            parsed = await enrich_with_llm(parsed)
+            if parsed is None:
+                continue  # 리포트가 아닌 메시지
 
             async with AsyncSessionLocal() as session:
                 _, action = await upsert_report(session, parsed)
