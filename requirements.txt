@@ -1,24 +1,16 @@
-# Telegram
 telethon==1.36.0
 
-# DB
 sqlalchemy==2.0.36
 alembic==1.14.0
 psycopg2-binary==2.9.10
 asyncpg==0.30.0
 
-# Config
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
 
-# HTTP
 aiohttp==3.11.10
 aiofiles==24.1.0
 
-# PDF (2차)
-# pymupdf==1.25.0
-# pdfplumber==0.11.4
 
-# Utils
 structlog==24.4.0
 tenacity==9.0.0

@@ -7,6 +7,7 @@ class Settings(BaseSettings):
         env_file=Path(__file__).parent / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        env_list_separator=",",
     )
 
     # Telegram
