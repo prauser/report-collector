@@ -65,7 +65,7 @@ class TestAnalyzePdf:
              patch("pathlib.Path.exists", return_value=True):
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
-            mock_settings.llm_model = "claude-haiku-4-5-20251001"
+            mock_settings.llm_pdf_model = "claude-sonnet-4-6"
             mock_settings.pdf_base_path = tmp_path
 
             result = await analyze_pdf(report)
@@ -145,7 +145,7 @@ class TestAnalyzePdf:
              patch("pathlib.Path.exists", return_value=True):
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
-            mock_settings.llm_model = "claude-haiku-4-5-20251001"
+            mock_settings.llm_pdf_model = "claude-sonnet-4-6"
             mock_settings.pdf_base_path = tmp_path
 
             result = await analyze_pdf(report)
@@ -165,7 +165,7 @@ class TestAnalyzePdf:
              patch("pathlib.Path.exists", return_value=True):
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
-            mock_settings.llm_model = "claude-haiku-4-5-20251001"
+            mock_settings.llm_pdf_model = "claude-sonnet-4-6"
             mock_settings.pdf_base_path = tmp_path
 
             await analyze_pdf(report)
@@ -173,6 +173,7 @@ class TestAnalyzePdf:
         mock_record.assert_called_once()
         assert mock_record.call_args.kwargs["purpose"] == "pdf_analysis"
         assert mock_record.call_args.kwargs["report_id"] == report.id
+        assert mock_record.call_args.kwargs["model"] == "claude-sonnet-4-6"
 
 
 class TestExtractPdfText:

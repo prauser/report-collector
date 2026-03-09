@@ -37,9 +37,10 @@ class Settings(BaseSettings):
     # LLM (Anthropic)
     anthropic_api_key: str | None = None
     llm_enabled: bool = True
-    llm_model: str = "claude-haiku-4-5-20251001"
+    llm_model: str = "claude-haiku-4-5-20251001"       # 메시지 분류/파싱용
+    llm_pdf_model: str = "claude-sonnet-4-6"            # PDF 본문 분석용 (의도 파악)
     llm_max_retries: int = 2
-    llm_timeout: int = 15
+    llm_timeout: int = 30
 
     # 로깅
     log_level: str = "INFO"

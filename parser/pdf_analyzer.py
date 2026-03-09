@@ -95,7 +95,7 @@ async def _call_llm(pdf_text: str, report_meta: str):
     client = _get_client()
     user_content = f"[리포트 메타]\n{report_meta}\n\n[PDF 본문]\n{pdf_text}"
     response = await client.messages.create(
-        model=settings.llm_model,
+        model=settings.llm_pdf_model,
         max_tokens=1024,
         system=SYSTEM_PROMPT,
         tools=[ANALYZE_TOOL],
@@ -145,7 +145,7 @@ async def analyze_pdf(report: Report) -> dict | None:
 
     usage = response.usage
     await record_llm_usage(
-        model=settings.llm_model,
+        model=settings.llm_pdf_model,
         purpose="pdf_analysis",
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
