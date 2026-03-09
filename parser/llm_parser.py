@@ -4,10 +4,9 @@ from anthropic import AsyncAnthropic, RateLimitError, APIConnectionError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from config.settings import settings
-from db.models import LlmUsage, calc_cost_usd
-from db.session import AsyncSessionLocal
 from parser.base import ParsedReport
 from parser.normalizer import normalize_broker, normalize_opinion, parse_price
+from storage.llm_usage_repo import record_llm_usage
 
 log = structlog.get_logger(__name__)
 
@@ -121,41 +120,6 @@ async def _call_llm(message_text: str):
     return None, response
 
 
-async def _record_usage(
-    response,
-    purpose: str,
-    source_channel: str | None,
-    report_id: int | None,
-    message_type: str | None = None,
-) -> None:
-    """llm_usage 테이블에 API 호출 비용을 기록."""
-    try:
-        usage = response.usage
-        cost = calc_cost_usd(settings.llm_model, usage.input_tokens, usage.output_tokens)
-        async with AsyncSessionLocal() as session:
-            session.add(LlmUsage(
-                model=settings.llm_model,
-                purpose=purpose,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cost_usd=cost,
-                message_type=message_type,
-                report_id=report_id,
-                source_channel=source_channel,
-            ))
-            await session.commit()
-        log.debug(
-            "llm_usage_recorded",
-            purpose=purpose,
-            message_type=message_type,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
-            cost_usd=float(cost),
-        )
-    except Exception as e:
-        log.warning("llm_usage_record_failed", error=str(e))
-
-
 def _merge_field(parsed_val, llm_val, normalizer=None):
     """LLM 값이 있으면 무조건 덮어씀. normalizer가 있으면 적용."""
     if llm_val:
@@ -187,19 +151,26 @@ async def enrich_with_llm(
         log.warning("llm_call_failed", error=str(e), title=parsed.title[:50])
         return parsed  # fallback: 정규식 결과 그대로
 
+    usage = response.usage
+    message_type = result.get("message_type", "general") if result else None
+
+    await record_llm_usage(
+        model=settings.llm_model,
+        purpose="parse",
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        source_channel=parsed.source_channel,
+        report_id=report_id,
+        message_type=message_type,
+    )
+
     if result is None:
         log.warning("llm_no_tool_result", title=parsed.title[:50])
-        await _record_usage(response, "parse", parsed.source_channel, report_id, message_type=None)
         return parsed
-
-    message_type = result.get("message_type", "general")
-
-    # usage 기록 — message_type 확정 후
-    await _record_usage(response, "parse", parsed.source_channel, report_id, message_type=message_type)
 
     if message_type != "broker_report":
         log.debug("llm_filtered", message_type=message_type, title=parsed.title[:50])
-        return None  # 리포트가 아님 → 저장 skip
+        return None
 
     # LLM 값으로 정규식 결과 덮어쓰기
     parsed.broker = _merge_field(parsed.broker, result.get("broker"), normalize_broker)
@@ -211,7 +182,6 @@ async def enrich_with_llm(
     parsed.sector = _merge_field(parsed.sector, result.get("sector"))
     parsed.report_type = _merge_field(parsed.report_type, result.get("report_type"))
 
-    # 가격 필드는 parse_price 적용
     llm_tp = result.get("target_price")
     if llm_tp:
         parsed.target_price = parse_price(llm_tp) or parsed.target_price

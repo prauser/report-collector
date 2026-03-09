@@ -1,4 +1,7 @@
 """reports 테이블 CRUD - upsert 중심."""
+from datetime import datetime, timezone
+from decimal import Decimal
+
 import structlog
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -115,3 +118,36 @@ async def update_pdf_info(
         .values(pdf_path=pdf_path, pdf_size_kb=pdf_size_kb, page_count=page_count)
     )
     await session.commit()
+
+
+async def update_ai_fields(
+    session: AsyncSession,
+    report_id: int,
+    summary: str,
+    sentiment: Decimal,
+    keywords: list[str],
+) -> None:
+    """ai_summary, ai_sentiment, ai_keywords, ai_processed_at 업데이트."""
+    await session.execute(
+        update(Report)
+        .where(Report.id == report_id)
+        .values(
+            ai_summary=summary,
+            ai_sentiment=sentiment,
+            ai_keywords=keywords,
+            ai_processed_at=datetime.now(timezone.utc),
+        )
+    )
+    await session.commit()
+
+
+async def get_reports_needing_ai(session: AsyncSession, limit: int = 100) -> list[Report]:
+    """PDF는 있지만 AI 분석이 안 된 리포트."""
+    result = await session.execute(
+        select(Report)
+        .where(Report.pdf_path.isnot(None))
+        .where(Report.ai_processed_at.is_(None))
+        .where(Report.pdf_download_failed.is_(False))
+        .limit(limit)
+    )
+    return result.scalars().all()

@@ -8,8 +8,9 @@ from db.session import AsyncSessionLocal
 from parser.registry import parse_message
 from storage import stock_mapper
 from parser.llm_parser import enrich_with_llm
+from parser.pdf_analyzer import analyze_pdf
 from storage.pdf_archiver import download_pdf
-from storage.report_repo import mark_pdf_failed, update_pdf_info, upsert_report
+from storage.report_repo import mark_pdf_failed, update_ai_fields, update_pdf_info, upsert_report
 
 log = structlog.get_logger(__name__)
 
@@ -48,6 +49,16 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
             rel_path, size_kb = await download_pdf(report)
             if rel_path:
                 await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                # PDF 다운 성공 → AI 분석
+                report.pdf_path = rel_path  # analyze_pdf에서 경로 참조
+                analysis = await analyze_pdf(report)
+                if analysis:
+                    await update_ai_fields(
+                        session, report.id,
+                        analysis["summary"],
+                        analysis["sentiment"],
+                        analysis["keywords"],
+                    )
             else:
                 await mark_pdf_failed(session, report.id)
 

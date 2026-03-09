@@ -51,7 +51,7 @@ class TestEnrichWithLLM:
         }
 
         with patch("parser.llm_parser._call_llm", new_callable=AsyncMock, return_value=_mock_call_result(llm_result)), \
-             patch("parser.llm_parser._record_usage", new_callable=AsyncMock), \
+             patch("parser.llm_parser.record_llm_usage", new_callable=AsyncMock), \
              patch("parser.llm_parser.settings") as mock_settings:
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
@@ -73,7 +73,7 @@ class TestEnrichWithLLM:
         parsed = _make_parsed()
 
         with patch("parser.llm_parser._call_llm", new_callable=AsyncMock, return_value=_mock_call_result({"message_type": "news"})), \
-             patch("parser.llm_parser._record_usage", new_callable=AsyncMock), \
+             patch("parser.llm_parser.record_llm_usage", new_callable=AsyncMock), \
              patch("parser.llm_parser.settings") as mock_settings:
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
@@ -89,7 +89,7 @@ class TestEnrichWithLLM:
         parsed = _make_parsed()
 
         with patch("parser.llm_parser._call_llm", new_callable=AsyncMock, return_value=_mock_call_result({"message_type": "general"})), \
-             patch("parser.llm_parser._record_usage", new_callable=AsyncMock), \
+             patch("parser.llm_parser.record_llm_usage", new_callable=AsyncMock), \
              patch("parser.llm_parser.settings") as mock_settings:
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
@@ -146,7 +146,7 @@ class TestEnrichWithLLM:
         parsed = _make_parsed()
 
         with patch("parser.llm_parser._call_llm", new_callable=AsyncMock, return_value=_mock_call_result(None)), \
-             patch("parser.llm_parser._record_usage", new_callable=AsyncMock), \
+             patch("parser.llm_parser.record_llm_usage", new_callable=AsyncMock), \
              patch("parser.llm_parser.settings") as mock_settings:
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
@@ -164,7 +164,7 @@ class TestEnrichWithLLM:
         llm_result = {"message_type": "broker_report", "broker": "KB증권"}
 
         with patch("parser.llm_parser._call_llm", new_callable=AsyncMock, return_value=_mock_call_result(llm_result)) as mock_call, \
-             patch("parser.llm_parser._record_usage", new_callable=AsyncMock) as mock_record, \
+             patch("parser.llm_parser.record_llm_usage", new_callable=AsyncMock) as mock_record, \
              patch("parser.llm_parser.settings") as mock_settings:
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
@@ -173,8 +173,7 @@ class TestEnrichWithLLM:
             await enrich_with_llm(parsed)
 
         mock_record.assert_called_once()
-        call_kwargs = mock_record.call_args
-        assert call_kwargs.args[1] == "parse"  # purpose
+        assert mock_record.call_args.kwargs["purpose"] == "parse"
 
 
 class TestMergeField:
@@ -214,7 +213,7 @@ class TestEnrichMergeLogic:
         llm_result = {"message_type": "broker_report", "broker": "KB증권"}
 
         with patch("parser.llm_parser._call_llm", new_callable=AsyncMock, return_value=_mock_call_result(llm_result)), \
-             patch("parser.llm_parser._record_usage", new_callable=AsyncMock), \
+             patch("parser.llm_parser.record_llm_usage", new_callable=AsyncMock), \
              patch("parser.llm_parser.settings") as mock_settings:
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
@@ -242,7 +241,7 @@ class TestEnrichMergeLogic:
         }
 
         with patch("parser.llm_parser._call_llm", new_callable=AsyncMock, return_value=_mock_call_result(llm_result)), \
-             patch("parser.llm_parser._record_usage", new_callable=AsyncMock), \
+             patch("parser.llm_parser.record_llm_usage", new_callable=AsyncMock), \
              patch("parser.llm_parser.settings") as mock_settings:
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
@@ -265,7 +264,7 @@ class TestEnrichMergeLogic:
         }
 
         with patch("parser.llm_parser._call_llm", new_callable=AsyncMock, return_value=_mock_call_result(llm_result)), \
-             patch("parser.llm_parser._record_usage", new_callable=AsyncMock), \
+             patch("parser.llm_parser.record_llm_usage", new_callable=AsyncMock), \
              patch("parser.llm_parser.settings") as mock_settings:
             mock_settings.llm_enabled = True
             mock_settings.anthropic_api_key = "test-key"
