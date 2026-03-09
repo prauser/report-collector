@@ -4,6 +4,8 @@ from anthropic import AsyncAnthropic, RateLimitError, APIConnectionError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from config.settings import settings
+from db.models import LlmUsage, calc_cost_usd
+from db.session import AsyncSessionLocal
 from parser.base import ParsedReport
 from parser.normalizer import normalize_broker, normalize_opinion, parse_price
 
@@ -101,8 +103,8 @@ EXTRACT_TOOL = {
     retry=retry_if_exception_type((RateLimitError, APIConnectionError)),
     reraise=True,
 )
-async def _call_llm(message_text: str) -> dict | None:
-    """Claude Haiku API 호출 → tool_use 결과 dict 반환."""
+async def _call_llm(message_text: str):
+    """Claude Haiku API 호출 → (tool_use 결과 dict, response) 반환."""
     client = _get_client()
     response = await client.messages.create(
         model=settings.llm_model,
@@ -115,8 +117,40 @@ async def _call_llm(message_text: str) -> dict | None:
 
     for block in response.content:
         if block.type == "tool_use" and block.name == "classify_and_extract":
-            return block.input
-    return None
+            return block.input, response
+    return None, response
+
+
+async def _record_usage(
+    response,
+    purpose: str,
+    source_channel: str | None,
+    report_id: int | None,
+) -> None:
+    """llm_usage 테이블에 API 호출 비용을 기록."""
+    try:
+        usage = response.usage
+        cost = calc_cost_usd(settings.llm_model, usage.input_tokens, usage.output_tokens)
+        async with AsyncSessionLocal() as session:
+            session.add(LlmUsage(
+                model=settings.llm_model,
+                purpose=purpose,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cost_usd=cost,
+                report_id=report_id,
+                source_channel=source_channel,
+            ))
+            await session.commit()
+        log.debug(
+            "llm_usage_recorded",
+            purpose=purpose,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=float(cost),
+        )
+    except Exception as e:
+        log.warning("llm_usage_record_failed", error=str(e))
 
 
 def _merge_field(parsed_val, llm_val, normalizer=None):
@@ -126,7 +160,10 @@ def _merge_field(parsed_val, llm_val, normalizer=None):
     return parsed_val
 
 
-async def enrich_with_llm(parsed: ParsedReport) -> ParsedReport | None:
+async def enrich_with_llm(
+    parsed: ParsedReport,
+    report_id: int | None = None,
+) -> ParsedReport | None:
     """
     LLM Stage 2 보강.
 
@@ -142,10 +179,13 @@ async def enrich_with_llm(parsed: ParsedReport) -> ParsedReport | None:
         return parsed
 
     try:
-        result = await _call_llm(parsed.raw_text)
+        result, response = await _call_llm(parsed.raw_text)
     except Exception as e:
         log.warning("llm_call_failed", error=str(e), title=parsed.title[:50])
         return parsed  # fallback: 정규식 결과 그대로
+
+    # usage 기록 (비동기, 실패해도 무시)
+    await _record_usage(response, "parse", parsed.source_channel, report_id)
 
     if result is None:
         log.warning("llm_no_tool_result", title=parsed.title[:50])

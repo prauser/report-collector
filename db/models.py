@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -115,3 +116,45 @@ class Channel(Base):
     last_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# Haiku 가격 (per 1M tokens, USD)
+_PRICE: dict[str, dict[str, float]] = {
+    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
+    "claude-haiku-3-5-20241022": {"input": 0.80, "output": 4.00},
+    "claude-sonnet-4-6":         {"input": 3.00, "output": 15.00},
+    "claude-opus-4-6":           {"input": 15.00, "output": 75.00},
+}
+
+
+def calc_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Decimal:
+    """모델별 토큰 사용량을 USD 비용으로 계산."""
+    price = _PRICE.get(model, {"input": 1.00, "output": 5.00})
+    cost = (input_tokens * price["input"] + output_tokens * price["output"]) / 1_000_000
+    return Decimal(str(round(cost, 8)))
+
+
+class LlmUsage(Base):
+    """LLM API 호출 비용 집계 테이블."""
+    __tablename__ = "llm_usage"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    called_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    model: Mapped[str] = mapped_column(String(60), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(40), nullable=False)  # parse / summarize / pdf_analysis
+
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
+
+    # 연관 리포트 (선택적)
+    report_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("reports.id", ondelete="SET NULL"), nullable=True
+    )
+    source_channel: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    __table_args__ = (
+        Index("ix_llm_usage_purpose_date", "purpose", "called_at"),
+        Index("ix_llm_usage_model_date", "model", "called_at"),
+    )
