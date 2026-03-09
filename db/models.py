@@ -148,6 +148,9 @@ class LlmUsage(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
 
+    # LLM 분류 결과 (parse 목적일 때: broker_report / news / general)
+    message_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     # 연관 리포트 (선택적)
     report_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("reports.id", ondelete="SET NULL"), nullable=True
@@ -157,4 +160,5 @@ class LlmUsage(Base):
     __table_args__ = (
         Index("ix_llm_usage_purpose_date", "purpose", "called_at"),
         Index("ix_llm_usage_model_date", "model", "called_at"),
+        Index("ix_llm_usage_message_type", "message_type"),
     )

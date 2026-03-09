@@ -126,6 +126,7 @@ async def _record_usage(
     purpose: str,
     source_channel: str | None,
     report_id: int | None,
+    message_type: str | None = None,
 ) -> None:
     """llm_usage 테이블에 API 호출 비용을 기록."""
     try:
@@ -138,6 +139,7 @@ async def _record_usage(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
                 cost_usd=cost,
+                message_type=message_type,
                 report_id=report_id,
                 source_channel=source_channel,
             ))
@@ -145,6 +147,7 @@ async def _record_usage(
         log.debug(
             "llm_usage_recorded",
             purpose=purpose,
+            message_type=message_type,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cost_usd=float(cost),
@@ -184,14 +187,15 @@ async def enrich_with_llm(
         log.warning("llm_call_failed", error=str(e), title=parsed.title[:50])
         return parsed  # fallback: 정규식 결과 그대로
 
-    # usage 기록 (비동기, 실패해도 무시)
-    await _record_usage(response, "parse", parsed.source_channel, report_id)
-
     if result is None:
         log.warning("llm_no_tool_result", title=parsed.title[:50])
+        await _record_usage(response, "parse", parsed.source_channel, report_id, message_type=None)
         return parsed
 
     message_type = result.get("message_type", "general")
+
+    # usage 기록 — message_type 확정 후
+    await _record_usage(response, "parse", parsed.source_channel, report_id, message_type=message_type)
 
     if message_type != "broker_report":
         log.debug("llm_filtered", message_type=message_type, title=parsed.title[:50])
