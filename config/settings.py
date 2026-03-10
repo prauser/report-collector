@@ -10,9 +10,9 @@ class Settings(BaseSettings):
         env_list_separator=",",
     )
 
-    # Telegram
-    telegram_api_id: int
-    telegram_api_hash: str
+    # Telegram (리스너 전용 - API 서버에서는 불필요)
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
     telegram_session_name: str = "report_collector"
     telegram_channels: list[str] = [
         "@repostory123",
