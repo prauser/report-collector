@@ -14,7 +14,7 @@ def event_loop():
 
 @pytest.fixture(scope="session")
 async def engine():
-    e = create_async_engine(settings.database_url, echo=False)
+    e = create_async_engine(settings.async_database_url, echo=False)
     yield e
     await e.dispose()
 

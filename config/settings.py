@@ -21,8 +21,8 @@ class Settings(BaseSettings):
         "@cb_eq_research",
     ]
 
-    # PostgreSQL (개별 설정 또는 DATABASE_URL 둘 다 지원)
-    database_url_override: str | None = None  # Railway의 DATABASE_URL 환경변수
+    # PostgreSQL - DATABASE_URL (Railway 표준) 또는 개별 설정
+    database_url: str | None = None  # Railway가 자동으로 DATABASE_URL 주입
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "report_collector"
@@ -38,8 +38,8 @@ class Settings(BaseSettings):
     # LLM (Anthropic)
     anthropic_api_key: str | None = None
     llm_enabled: bool = True
-    llm_model: str = "claude-haiku-4-5-20251001"       # 메시지 분류/파싱용
-    llm_pdf_model: str = "claude-sonnet-4-6"            # PDF 본문 분석용 (의도 파악)
+    llm_model: str = "claude-haiku-4-5-20251001"
+    llm_pdf_model: str = "claude-sonnet-4-6"
     llm_max_retries: int = 2
     llm_timeout: int = 30
 
@@ -49,28 +49,28 @@ class Settings(BaseSettings):
     # 로깅
     log_level: str = "INFO"
 
+    def _convert_url(self, driver: str) -> str:
+        """postgresql:// 또는 postgres:// → 지정 드라이버로 변환."""
+        url = self.database_url or ""
+        return (
+            url
+            .replace("postgres://", f"postgresql+{driver}://", 1)
+            .replace("postgresql://", f"postgresql+{driver}://", 1)
+        )
+
     @property
-    def database_url(self) -> str:
-        if self.database_url_override:
-            # Railway가 주는 postgresql://... → asyncpg 드라이버로 교체
-            return self.database_url_override.replace(
-                "postgres://", "postgresql+asyncpg://", 1
-            ).replace(
-                "postgresql://", "postgresql+asyncpg://", 1
-            )
+    def async_database_url(self) -> str:
+        if self.database_url:
+            return self._convert_url("asyncpg")
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
     @property
-    def database_url_sync(self) -> str:
-        if self.database_url_override:
-            return self.database_url_override.replace(
-                "postgres://", "postgresql+psycopg2://", 1
-            ).replace(
-                "postgresql://", "postgresql+psycopg2://", 1
-            )
+    def sync_database_url(self) -> str:
+        if self.database_url:
+            return self._convert_url("psycopg2")
         return (
             f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
