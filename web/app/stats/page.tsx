@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { api } from "@/lib/api";
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
