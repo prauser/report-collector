@@ -19,3 +19,7 @@ pypdf>=4.0.0
 
 structlog==24.4.0
 tenacity==9.0.0
+
+# API 서버
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0

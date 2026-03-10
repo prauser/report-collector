@@ -21,7 +21,8 @@ class Settings(BaseSettings):
         "@cb_eq_research",
     ]
 
-    # PostgreSQL
+    # PostgreSQL (개별 설정 또는 DATABASE_URL 둘 다 지원)
+    database_url_override: str | None = None  # Railway의 DATABASE_URL 환경변수
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "report_collector"
@@ -42,11 +43,21 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_timeout: int = 30
 
+    # API 서버
+    allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+
     # 로깅
     log_level: str = "INFO"
 
     @property
     def database_url(self) -> str:
+        if self.database_url_override:
+            # Railway가 주는 postgresql://... → asyncpg 드라이버로 교체
+            return self.database_url_override.replace(
+                "postgres://", "postgresql+asyncpg://", 1
+            ).replace(
+                "postgresql://", "postgresql+asyncpg://", 1
+            )
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -54,6 +65,12 @@ class Settings(BaseSettings):
 
     @property
     def database_url_sync(self) -> str:
+        if self.database_url_override:
+            return self.database_url_override.replace(
+                "postgres://", "postgresql+psycopg2://", 1
+            ).replace(
+                "postgresql://", "postgresql+psycopg2://", 1
+            )
         return (
             f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"

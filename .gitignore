@@ -5,6 +5,7 @@ config/.env
 # Telethon 세션
 *.session
 *.session-journal
+scripts/.auth_state.json
 
 # Python
 __pycache__/
@@ -25,3 +26,8 @@ data/pdfs/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Next.js
+web/.next/
+web/node_modules/
+web/.env.local
