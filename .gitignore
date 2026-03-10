@@ -31,3 +31,7 @@ htmlcov/
 web/.next/
 web/node_modules/
 web/.env.local
+
+# Claude uploads
+.claude-uploads/
+`
