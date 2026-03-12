@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
     telegram_session_name: str = "report_collector"
+    telegram_session_string: str | None = None  # Railway용 StringSession
     telegram_channels: list[str] = [
         "@repostory123",
         "@companyreport",

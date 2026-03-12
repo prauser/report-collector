@@ -10,8 +10,12 @@ _client: TelegramClient | None = None
 def get_client() -> TelegramClient:
     global _client
     if _client is None:
+        if settings.telegram_session_string:
+            session = StringSession(settings.telegram_session_string)
+        else:
+            session = settings.telegram_session_name
         _client = TelegramClient(
-            settings.telegram_session_name,
+            session,
             settings.telegram_api_id,
             settings.telegram_api_hash,
         )
