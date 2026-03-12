@@ -26,6 +26,15 @@ export default function RootLayout({
             <Link href="/stats" className="text-sm text-gray-600 hover:text-gray-900">
               통계
             </Link>
+            <Link href="/backfill" className="text-sm text-gray-600 hover:text-gray-900">
+              백필
+            </Link>
+            <Link href="/pending" className="text-sm text-gray-600 hover:text-gray-900">
+              검토 대기
+            </Link>
+            <Link href="/settings" className="text-sm text-gray-600 hover:text-gray-900">
+              설정
+            </Link>
           </div>
         </nav>
         <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>

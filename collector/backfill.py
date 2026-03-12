@@ -165,7 +165,13 @@ async def backfill_all() -> None:
     client = get_client()
     await client.start()
 
-    for channel in settings.telegram_channels:
+    async with AsyncSessionLocal() as session:
+        rows = (await session.scalars(
+            select(Channel).where(Channel.is_active == True)
+        )).all()
+        channels = [r.channel_username for r in rows] or settings.telegram_channels
+
+    for channel in channels:
         try:
             await backfill_channel(channel)
         except Exception as e:
