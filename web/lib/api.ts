@@ -74,6 +74,66 @@ export interface LlmStats {
   daily_cost: { date: string; cost_usd: number }[];
 }
 
+export interface BackfillChannelStat {
+  channel: string;
+  last_run_date: string | null;
+  last_finished_at: string | null;
+  latest_message_id: number | null;
+  earliest_from_id: number | null;
+  total_runs: number;
+  total_scanned: number;
+  total_saved: number;
+  total_pending: number;
+  total_skipped: number;
+}
+
+export interface BackfillRunItem {
+  channel: string;
+  run_date: string;
+  started_at: string;
+  finished_at: string | null;
+  from_message_id: number | null;
+  to_message_id: number | null;
+  n_scanned: number;
+  n_saved: number;
+  n_pending: number;
+  n_skipped: number;
+  status: string;
+}
+
+export interface PdfCoverage {
+  channel: string;
+  total_reports: number;
+  has_pdf_url: number;
+  pdf_downloaded: number;
+  ai_analyzed: number;
+}
+
+export interface BackfillStats {
+  by_channel: BackfillChannelStat[];
+  recent_runs: BackfillRunItem[];
+  pdf_coverage: PdfCoverage[];
+}
+
+export interface PendingMessage {
+  id: number;
+  source_channel: string;
+  source_message_id: number | null;
+  raw_text: string | null;
+  pdf_url: string | null;
+  s2a_label: string | null;
+  s2a_reason: string | null;
+  review_status: string;
+  created_at: string;
+}
+
+export interface PendingListResponse {
+  items: PendingMessage[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export type ReportListParams = {
   q?: string;
   stock?: string;
@@ -112,5 +172,27 @@ export const api = {
   stats: {
     overview: () => get<OverviewStats>("/api/stats/overview"),
     llm: (days = 30) => get<LlmStats>("/api/stats/llm", { days }),
+    backfill: () => get<BackfillStats>("/api/stats/backfill"),
+  },
+  backfill: {
+    channels: () => get<{ channels: string[] }>("/api/backfill/channels"),
+    running: () => get<{ running: string[] }>("/api/backfill/running"),
+    run: (channel: string) =>
+      fetch(`${BASE}/api/backfill/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel }),
+      }).then((r) => r.json()),
+  },
+  pending: {
+    list: (params?: { status?: string; channel?: string; limit?: number; offset?: number }) =>
+      get<PendingListResponse>("/api/pending", params as Record<string, unknown>),
+    stats: () => get<Record<string, number>>("/api/pending/stats"),
+    resolve: (id: number, decision: "broker_report" | "discarded") =>
+      fetch(`${BASE}/api/pending/${id}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      }).then((r) => r.json()),
   },
 };

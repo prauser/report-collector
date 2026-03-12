@@ -8,7 +8,7 @@ from sqlalchemy.types import Date
 
 from api.deps import get_db
 from api.schemas import LlmStats, LlmUsageStat, OverviewStats
-from db.models import LlmUsage, Report
+from db.models import BackfillRun, LlmUsage, Report
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -143,3 +143,108 @@ async def get_llm_stats(
             {"date": str(r[0]), "cost_usd": float(r[1] or 0)} for r in daily_rows
         ],
     )
+
+
+@router.get("/backfill")
+async def get_backfill_stats(db: AsyncSession = Depends(get_db)):
+    """채널별 백필 현황 + PDF/AI 분석 커버리지."""
+
+    # 채널별 최근 런 + 누적 통계
+    run_rows = (
+        await db.execute(
+            select(
+                BackfillRun.channel_username,
+                func.max(BackfillRun.run_date).label("last_run_date"),
+                func.max(BackfillRun.finished_at).label("last_finished_at"),
+                func.max(BackfillRun.to_message_id).label("latest_message_id"),
+                func.min(BackfillRun.from_message_id).label("earliest_from_id"),
+                func.count(BackfillRun.id).label("total_runs"),
+                func.sum(BackfillRun.n_scanned).label("total_scanned"),
+                func.sum(BackfillRun.n_saved).label("total_saved"),
+                func.sum(BackfillRun.n_pending).label("total_pending"),
+                func.sum(BackfillRun.n_skipped).label("total_skipped"),
+            )
+            .group_by(BackfillRun.channel_username)
+            .order_by(BackfillRun.channel_username)
+        )
+    ).all()
+
+    # 채널별 런 히스토리 (최근 20건)
+    history_rows = (
+        await db.execute(
+            select(
+                BackfillRun.channel_username,
+                BackfillRun.run_date,
+                BackfillRun.started_at,
+                BackfillRun.finished_at,
+                BackfillRun.from_message_id,
+                BackfillRun.to_message_id,
+                BackfillRun.n_scanned,
+                BackfillRun.n_saved,
+                BackfillRun.n_pending,
+                BackfillRun.n_skipped,
+                BackfillRun.status,
+            )
+            .order_by(BackfillRun.started_at.desc())
+            .limit(20)
+        )
+    ).all()
+
+    # 채널별 PDF / AI 커버리지
+    coverage_rows = (
+        await db.execute(
+            select(
+                Report.source_channel,
+                func.count(Report.id).label("total"),
+                func.count(Report.pdf_url).label("has_pdf_url"),
+                func.count(Report.pdf_path).label("pdf_downloaded"),
+                func.count(Report.ai_processed_at).label("ai_analyzed"),
+            )
+            .group_by(Report.source_channel)
+            .order_by(Report.source_channel)
+        )
+    ).all()
+
+    return {
+        "by_channel": [
+            {
+                "channel": r.channel_username,
+                "last_run_date": str(r.last_run_date) if r.last_run_date else None,
+                "last_finished_at": r.last_finished_at.isoformat() if r.last_finished_at else None,
+                "latest_message_id": r.latest_message_id,
+                "earliest_from_id": r.earliest_from_id,
+                "total_runs": r.total_runs,
+                "total_scanned": r.total_scanned or 0,
+                "total_saved": r.total_saved or 0,
+                "total_pending": r.total_pending or 0,
+                "total_skipped": r.total_skipped or 0,
+            }
+            for r in run_rows
+        ],
+        "recent_runs": [
+            {
+                "channel": r.channel_username,
+                "run_date": str(r.run_date),
+                "started_at": r.started_at.isoformat(),
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                "from_message_id": r.from_message_id,
+                "to_message_id": r.to_message_id,
+                "n_scanned": r.n_scanned,
+                "n_saved": r.n_saved,
+                "n_pending": r.n_pending,
+                "n_skipped": r.n_skipped,
+                "status": r.status,
+            }
+            for r in history_rows
+        ],
+        "pdf_coverage": [
+            {
+                "channel": r.source_channel,
+                "total_reports": r.total,
+                "has_pdf_url": r.has_pdf_url,
+                "pdf_downloaded": r.pdf_downloaded,
+                "ai_analyzed": r.ai_analyzed,
+            }
+            for r in coverage_rows
+        ],
+    }
