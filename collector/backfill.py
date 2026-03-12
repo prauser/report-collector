@@ -12,6 +12,7 @@ from db.models import BackfillRun, Channel
 from parser.registry import parse_message
 from storage import stock_mapper
 from parser.llm_parser import classify_message, extract_metadata
+from parser.quality import assess_parse_quality
 from storage.pending_repo import save_pending
 from storage.report_repo import upsert_report
 from sqlalchemy import select
@@ -100,6 +101,7 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
                 parsed.stock_code = await stock_mapper.get_code(parsed.stock_name)
 
             parsed = await extract_metadata(parsed)
+            parsed.parse_quality = assess_parse_quality(parsed)
 
             async with AsyncSessionLocal() as session:
                 _, action = await upsert_report(session, parsed)

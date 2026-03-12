@@ -61,6 +61,9 @@ class Report(Base):
     page_count: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     pdf_download_failed: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # 파싱 품질 (good / partial / poor)
+    parse_quality: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
     # 소스 추적
     source_channel: Mapped[str] = mapped_column(String(100), nullable=False)
     source_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

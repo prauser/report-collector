@@ -48,6 +48,7 @@ async def upsert_report(session: AsyncSession, parsed: ParsedReport) -> tuple[Re
         "source_channel": parsed.source_channel,
         "source_message_id": parsed.source_message_id,
         "raw_text": parsed.raw_text,
+        "parse_quality": parsed.parse_quality,
     }
 
     stmt = insert(Report).values(**values)

@@ -8,6 +8,7 @@ from db.session import AsyncSessionLocal
 from parser.registry import parse_message
 from storage import stock_mapper
 from parser.llm_parser import classify_message, extract_metadata
+from parser.quality import assess_parse_quality
 from parser.pdf_analyzer import analyze_pdf
 from storage.pdf_archiver import download_pdf
 from storage.pending_repo import save_pending
@@ -123,6 +124,7 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
     pdf_meta_ctx = _build_pdf_meta_context(parsed.pdf_url)
 
     parsed = await extract_metadata(parsed, pdf_meta_context=pdf_meta_ctx)
+    parsed.parse_quality = assess_parse_quality(parsed)
 
     async with AsyncSessionLocal() as session:
         report, action = await upsert_report(session, parsed)

@@ -33,6 +33,7 @@ class ParsedReport:
     pdf_url: str | None = None
     source_message_id: int | None = None
 
+    parse_quality: str | None = None  # good / partial / poor
     parse_errors: list[str] = field(default_factory=list)
 
 
