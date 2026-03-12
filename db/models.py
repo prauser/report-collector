@@ -134,6 +134,60 @@ def calc_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Decimal:
     return Decimal(str(round(cost, 8)))
 
 
+class PendingMessage(Base):
+    """S2a에서 ambiguous로 분류된 메시지 — 사람 검토 대기."""
+    __tablename__ = "pending_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    source_channel: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pdf_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    s2a_label: Mapped[str | None] = mapped_column(String(20), nullable=True)   # ambiguous
+    s2a_reason: Mapped[str | None] = mapped_column(Text, nullable=True)         # LLM 이유
+
+    # pending / broker_report / discarded
+    review_status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_pending_messages_channel", "source_channel"),
+        Index("ix_pending_messages_status", "review_status"),
+        Index("ix_pending_messages_created", "created_at"),
+    )
+
+
+class BackfillRun(Base):
+    """채널별 백필 실행 기록."""
+    __tablename__ = "backfill_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    channel_username: Mapped[str] = mapped_column(String(100), nullable=False)
+    run_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    from_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    to_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    n_scanned: Mapped[int] = mapped_column(Integer, default=0)
+    n_saved: Mapped[int] = mapped_column(Integer, default=0)
+    n_pending: Mapped[int] = mapped_column(Integer, default=0)
+    n_skipped: Mapped[int] = mapped_column(Integer, default=0)
+
+    # running / done / error
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_backfill_runs_channel", "channel_username", "run_date"),
+    )
+
+
 class LlmUsage(Base):
     """LLM API 호출 비용 집계 테이블."""
     __tablename__ = "llm_usage"
