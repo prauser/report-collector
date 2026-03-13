@@ -48,9 +48,20 @@ async def list_channels(session: AsyncSession = Depends(get_session)):
     return [_to_out(ch) for ch in rows]
 
 
+def _normalize_username(raw: str) -> str:
+    """t.me/foo, https://t.me/foo, @foo, foo → @foo"""
+    s = raw.strip().rstrip("/")
+    # URL 형태 처리
+    if "t.me/" in s:
+        s = s.split("t.me/")[-1].split("/")[0].split("?")[0]
+    # @ 제거 후 재부착
+    s = s.lstrip("@")
+    return f"@{s}"
+
+
 @router.post("", response_model=ChannelOut, status_code=201)
 async def add_channel(req: AddChannelRequest, session: AsyncSession = Depends(get_session)):
-    username = req.username if req.username.startswith("@") else f"@{req.username}"
+    username = _normalize_username(req.username)
     ch = Channel(channel_username=username, display_name=req.display_name, is_active=True)
     session.add(ch)
     await session.commit()

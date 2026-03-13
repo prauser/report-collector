@@ -119,7 +119,7 @@ export default function SettingsPage() {
           type="text"
           value={newUsername}
           onChange={(e) => setNewUsername(e.target.value)}
-          placeholder="@채널명"
+          placeholder="@채널명 또는 t.me/채널명"
           className="flex-1 border rounded px-3 py-2 text-sm font-mono"
         />
         <button
