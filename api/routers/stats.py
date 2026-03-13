@@ -8,7 +8,7 @@ from sqlalchemy.types import Date
 
 from api.deps import get_db
 from api.schemas import LlmStats, LlmUsageStat, OverviewStats
-from db.models import BackfillRun, LlmUsage, Report
+from db.models import BackfillRun, Channel, LlmUsage, Report
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -149,7 +149,12 @@ async def get_llm_stats(
 async def get_backfill_stats(db: AsyncSession = Depends(get_db)):
     """채널별 백필 현황 + PDF/AI 분석 커버리지."""
 
-    # 채널별 최근 런 + 누적 통계
+    # 활성 채널 목롮 (기준)
+    active_channels = (await db.scalars(
+        select(Channel.channel_username).where(Channel.is_active == True)
+    )).all()
+
+    # 채널별 백필 런 누적 통계
     run_rows = (
         await db.execute(
             select(
@@ -165,9 +170,9 @@ async def get_backfill_stats(db: AsyncSession = Depends(get_db)):
                 func.sum(BackfillRun.n_skipped).label("total_skipped"),
             )
             .group_by(BackfillRun.channel_username)
-            .order_by(BackfillRun.channel_username)
         )
     ).all()
+    run_map = {r.channel_username: r for r in run_rows}
 
     # 채널별 런 히스토리 (최근 20건)
     history_rows = (
@@ -208,18 +213,18 @@ async def get_backfill_stats(db: AsyncSession = Depends(get_db)):
     return {
         "by_channel": [
             {
-                "channel": r.channel_username,
-                "last_run_date": str(r.last_run_date) if r.last_run_date else None,
-                "last_finished_at": r.last_finished_at.isoformat() if r.last_finished_at else None,
-                "latest_message_id": r.latest_message_id,
-                "earliest_from_id": r.earliest_from_id,
-                "total_runs": r.total_runs,
-                "total_scanned": r.total_scanned or 0,
-                "total_saved": r.total_saved or 0,
-                "total_pending": r.total_pending or 0,
-                "total_skipped": r.total_skipped or 0,
+                "channel": ch,
+                "last_run_date": str(run_map[ch].last_run_date) if ch in run_map and run_map[ch].last_run_date else None,
+                "last_finished_at": run_map[ch].last_finished_at.isoformat() if ch in run_map and run_map[ch].last_finished_at else None,
+                "latest_message_id": run_map[ch].latest_message_id if ch in run_map else None,
+                "earliest_from_id": run_map[ch].earliest_from_id if ch in run_map else None,
+                "total_runs": run_map[ch].total_runs if ch in run_map else 0,
+                "total_scanned": run_map[ch].total_scanned or 0 if ch in run_map else 0,
+                "total_saved": run_map[ch].total_saved or 0 if ch in run_map else 0,
+                "total_pending": run_map[ch].total_pending or 0 if ch in run_map else 0,
+                "total_skipped": run_map[ch].total_skipped or 0 if ch in run_map else 0,
             }
-            for r in run_rows
+            for ch in sorted(active_channels)
         ],
         "recent_runs": [
             {

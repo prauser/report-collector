@@ -1,9 +1,13 @@
 """백필 실행 엔드포인트."""
 import asyncio
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import settings
+from db.models import Channel
+from db.session import get_session
 
 router = APIRouter(prefix="/backfill", tags=["backfill"])
 
@@ -36,10 +40,17 @@ async def _run_backfill(channel: str) -> None:
         _running.discard(channel)
 
 
+async def _active_channels(session: AsyncSession) -> list[str]:
+    rows = (await session.scalars(
+        select(Channel).where(Channel.is_active == True)
+    )).all()
+    return [r.channel_username for r in rows] or settings.telegram_channels
+
+
 @router.get("/channels")
-async def list_channels():
-    """설정된 채널 목록 반환."""
-    return {"channels": settings.telegram_channels}
+async def list_channels(session: AsyncSession = Depends(get_session)):
+    """DB의 활성 채널 목록 반환."""
+    return {"channels": await _active_channels(session)}
 
 
 @router.get("/running")
@@ -49,10 +60,10 @@ async def get_running():
 
 
 @router.post("/run", response_model=RunResponse)
-async def run_backfill(req: RunRequest, background_tasks: BackgroundTasks):
-    """백필 실행 트리거. channel="all" 이면 전체 채널."""
+async def run_backfill(req: RunRequest, background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)):
+    """백필 실행 트리거. channel="all" 이면 전체 활성 채널."""
     if req.channel == "all":
-        channels = settings.telegram_channels
+        channels = await _active_channels(session)
     else:
         channels = [req.channel]
 
