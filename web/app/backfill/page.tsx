@@ -2,7 +2,7 @@
 export const dynamic = "force-dynamic";
 
 import { useEffect, useState, useCallback } from "react";
-import { api, BackfillStats } from "@/lib/api";
+import { api, BackfillStats, ParseQuality } from "@/lib/api";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -52,6 +52,40 @@ async function fetchRunning(): Promise<string[]> {
   if (!res.ok) return [];
   const data = await res.json();
   return data.running ?? [];
+}
+
+async function retryFailedPdfs(channel?: string): Promise<{ reset_count: number }> {
+  const body: Record<string, unknown> = {};
+  if (channel) body.channel = channel;
+  const res = await fetch(`${BASE}/api/backfill/retry-pdf`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
+function QualityBar({ q }: { q: ParseQuality }) {
+  const total = q.good + q.partial + q.poor + q.unknown;
+  if (!total) return <span className="text-xs text-gray-400">-</span>;
+  const seg = (n: number, color: string) =>
+    n > 0 ? <div className={`h-2 ${color}`} style={{ width: `${(n / total) * 100}%` }} /> : null;
+  return (
+    <div className="space-y-1">
+      <div className="flex rounded-full overflow-hidden h-2 bg-gray-100">
+        {seg(q.good, "bg-green-400")}
+        {seg(q.partial, "bg-yellow-400")}
+        {seg(q.poor, "bg-red-400")}
+        {seg(q.unknown, "bg-gray-300")}
+      </div>
+      <div className="flex gap-2 text-[10px] text-gray-500">
+        <span className="text-green-600">{q.good}G</span>
+        <span className="text-yellow-600">{q.partial}P</span>
+        <span className="text-red-600">{q.poor}B</span>
+      </div>
+    </div>
+  );
 }
 
 export default function BackfillPage() {
@@ -238,12 +272,42 @@ export default function BackfillPage() {
                     </div>
                     <Bar value={c.pdf_downloaded} max={c.has_pdf_url} color="bg-indigo-400" />
                   </div>
+                  {c.pdf_failed > 0 && (
+                    <div>
+                      <div className="flex justify-between text-xs text-gray-500 mb-1">
+                        <span className="text-red-600">PDF 다운로드 실패</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-red-600">{c.pdf_failed.toLocaleString()}건</span>
+                          <button
+                            onClick={async () => {
+                              try {
+                                const res = await retryFailedPdfs(c.channel);
+                                alert(`${res.reset_count}건 재시도 시작`);
+                                refresh();
+                              } catch (e) {
+                                alert(`재시도 실패: ${e}`);
+                              }
+                            }}
+                            className="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded hover:bg-red-100"
+                          >
+                            재시도
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <div className="flex justify-between text-xs text-gray-500 mb-1">
                       <span>AI 본문 분석 완료</span>
                       <span>{c.ai_analyzed.toLocaleString()} / {c.pdf_downloaded.toLocaleString()} ({pct(c.ai_analyzed, c.pdf_downloaded)})</span>
                     </div>
                     <Bar value={c.ai_analyzed} max={c.pdf_downloaded} color="bg-purple-400" />
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs text-gray-500 mb-1">
+                      <span>파싱 품질</span>
+                    </div>
+                    <QualityBar q={c.parse_quality} />
                   </div>
                 </div>
               </div>
@@ -290,7 +354,14 @@ export default function BackfillPage() {
                     <td className="p-3 text-right text-green-700 font-medium">{r.n_saved.toLocaleString()}</td>
                     <td className="p-3 text-right text-amber-600">{r.n_pending.toLocaleString()}</td>
                     <td className="p-3 text-right text-gray-400">{r.n_skipped.toLocaleString()}</td>
-                    <td className="p-3 text-center"><StatusBadge status={r.status} /></td>
+                    <td className="p-3 text-center">
+                      <StatusBadge status={r.status} />
+                      {r.status === "error" && r.error_msg && (
+                        <div className="mt-1 text-[10px] text-red-500 max-w-[200px] truncate" title={r.error_msg}>
+                          {r.error_msg}
+                        </div>
+                      )}
+                    </td>
                     <td className="p-3 text-right text-gray-500 text-xs">
                       {secs !== null ? `${secs}s` : "-"}
                     </td>

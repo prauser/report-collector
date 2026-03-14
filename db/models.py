@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -74,6 +75,11 @@ class Report(Base):
     ai_sentiment: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
     ai_keywords: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     ai_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Layer 2 분석 상태
+    analysis_status: Mapped[str | None] = mapped_column(String(20), default="pending")
+    analysis_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    markdown_converted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # 타임스탬프
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -188,6 +194,134 @@ class BackfillRun(Base):
 
     __table_args__ = (
         Index("ix_backfill_runs_channel", "channel_username", "run_date"),
+    )
+
+
+class ReportMarkdown(Base):
+    """PDF → Markdown 변환 결과 저장."""
+    __tablename__ = "report_markdown"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    markdown_text: Mapped[str] = mapped_column(Text, nullable=False)
+    converter: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ReportAnalysis(Base):
+    """Layer 2 구조화 분석 결과."""
+    __tablename__ = "report_analysis"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    report_category: Mapped[str] = mapped_column(String(20), nullable=False)
+    analysis_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    llm_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    schema_version: Mapped[str] = mapped_column(String(20), nullable=False, default="v1")
+    extraction_quality: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_report_analysis_category", "report_category"),
+        Index("idx_report_analysis_schema_ver", "schema_version"),
+    )
+
+
+class ReportStockMention(Base):
+    """종목-리포트 연결 테이블."""
+    __tablename__ = "report_stock_mentions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), nullable=False
+    )
+    stock_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    company_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    mention_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    impact: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    relevance_score: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_rsm_stock_code", "stock_code"),
+        Index("idx_rsm_report_id", "report_id"),
+        Index("idx_rsm_mention_type", "mention_type"),
+        Index("uq_report_stock", "report_id", "stock_code", unique=True),
+    )
+
+
+class ReportSectorMention(Base):
+    """섹터-리포트 연결 테이블."""
+    __tablename__ = "report_sector_mentions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), nullable=False
+    )
+    sector: Mapped[str] = mapped_column(String(100), nullable=False)
+    mention_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    impact: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_rscm_sector", "sector"),
+        Index("idx_rscm_report_id", "report_id"),
+        Index("uq_report_sector", "report_id", "sector", unique=True),
+    )
+
+
+class ReportKeyword(Base):
+    """키워드 태그 테이블."""
+    __tablename__ = "report_keywords"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), nullable=False
+    )
+    keyword: Mapped[str] = mapped_column(String(100), nullable=False)
+    keyword_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_rk_keyword", "keyword"),
+        Index("idx_rk_keyword_type", "keyword_type"),
+        Index("idx_rk_report_id", "report_id"),
+        Index("uq_report_keyword", "report_id", "keyword", unique=True),
+    )
+
+
+class AnalysisJob(Base):
+    """분석 처리 로그."""
+    __tablename__ = "analysis_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), nullable=False
+    )
+    job_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    target_schema_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_aj_report_id", "report_id"),
+        Index("idx_aj_status", "status"),
+        Index("idx_aj_job_type", "job_type"),
     )
 
 

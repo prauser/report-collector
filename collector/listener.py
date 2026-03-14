@@ -1,4 +1,8 @@
-"""실시간 메시지 수신 - Telethon event handler."""
+"""실시간 메시지 수신 - Telethon event handler.
+
+파이프라인:
+  S2a(분류) → DB저장 → PDF다운 → Markdown변환 → Layer2 추출(Sonnet) → DB(분석 저장)
+"""
 import structlog
 from telethon import events
 from telethon.tl.types import MessageMediaDocument, DocumentAttributeFilename
@@ -7,76 +11,18 @@ from collector.telegram_client import get_client
 from config.settings import settings
 from db.session import AsyncSessionLocal
 from parser.registry import parse_message
-from storage import stock_mapper
-from parser.llm_parser import classify_message, extract_metadata
+from parser.llm_parser import classify_message
 from parser.quality import assess_parse_quality
-from parser.pdf_analyzer import analyze_pdf
+from parser.markdown_converter import convert_pdf_to_markdown
+from parser.layer2_extractor import extract_layer2
+from parser.normalizer import normalize_broker, normalize_opinion, parse_price
+from storage import stock_mapper
 from storage.pdf_archiver import download_pdf, download_telegram_document
 from storage.pending_repo import save_pending
-from storage.report_repo import mark_pdf_failed, update_ai_fields, update_pdf_info, upsert_report
+from storage.report_repo import mark_pdf_failed, update_pdf_info, upsert_report
+from storage.analysis_repo import save_markdown, save_analysis, log_analysis_failure
 
 log = structlog.get_logger(__name__)
-
-
-def _build_pdf_meta_context(pdf_url: str | None) -> str | None:
-    """다운로드된 PDF의 메타데이터를 S2b 컨텍스트 문자열로 변환."""
-    if not pdf_url:
-        return None
-    try:
-        import io, requests
-        from urllib.parse import urlparse, parse_qs
-        from pypdf import PdfReader
-
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(pdf_url, timeout=20, headers=headers, allow_redirects=True)
-
-        # Google Docs viewer 언래핑
-        if "docs.google.com/viewer" in r.url:
-            qs = parse_qs(urlparse(r.url).query)
-            real_url = qs.get("url", [None])[0]
-            if real_url:
-                r = requests.get(real_url, timeout=20, headers=headers)
-
-        ct = r.headers.get("Content-Type", "")
-        if "pdf" not in ct and "octet-stream" not in ct:
-            return None
-
-        reader = PdfReader(io.BytesIO(r.content))
-        meta = reader.metadata
-        if not meta:
-            return None
-
-        def _decode(v):
-            if v is None:
-                return None
-            if hasattr(v, "original_bytes"):
-                raw = v.original_bytes
-                if raw.startswith(b"\xfe\xff"):
-                    try:
-                        return raw[2:].decode("utf-16-be")
-                    except Exception:
-                        pass
-                for enc in ("euc-kr", "cp949", "utf-8"):
-                    try:
-                        return raw.decode(enc)
-                    except Exception:
-                        pass
-            return str(v)
-
-        parts = []
-        if kw := _decode(meta.get("/Keywords")):
-            parts.append(f"Keywords: {kw}")
-        if au := _decode(meta.get("/Author")):
-            parts.append(f"Author: {au}")
-        if ti := _decode(meta.get("/Title")):
-            parts.append(f"Title: {ti}")
-        parts.append(f"Pages: {len(reader.pages)}")
-
-        return "\n".join(parts) if parts else None
-
-    except Exception as e:
-        log.debug("pdf_meta_context_failed", error=str(e))
-        return None
 
 
 def _pdf_filename(message) -> str | None:
@@ -92,6 +38,58 @@ def _pdf_filename(message) -> str | None:
     return None
 
 
+def _apply_layer2_meta(report, meta: dict, session_needed: bool = False) -> dict:
+    """
+    Layer2 메타데이터로 report 필드 업데이트 값 dict 반환.
+    실제 UPDATE는 호출자가 수행.
+    """
+    if not meta:
+        return {}
+
+    updates = {}
+
+    def _pick(key, normalizer=None):
+        val = meta.get(key)
+        if val:
+            return normalizer(val) if normalizer else val
+        return None
+
+    if v := _pick("broker", normalize_broker):
+        updates["broker"] = v
+    if v := _pick("stock_name"):
+        updates["stock_name"] = v
+    if v := _pick("stock_code"):
+        updates["stock_code"] = v
+    if v := _pick("analyst"):
+        updates["analyst"] = v
+    if v := _pick("opinion", normalize_opinion):
+        updates["opinion"] = v
+    if v := _pick("sector"):
+        updates["sector"] = v
+    if v := _pick("report_type"):
+        updates["report_type"] = v
+    if v := _pick("prev_opinion", normalize_opinion):
+        updates["prev_opinion"] = v
+
+    tp = meta.get("target_price")
+    if isinstance(tp, int) and tp > 0:
+        updates["target_price"] = tp
+    elif isinstance(tp, str):
+        parsed_tp = parse_price(tp)
+        if parsed_tp:
+            updates["target_price"] = parsed_tp
+
+    ptp = meta.get("prev_target_price")
+    if isinstance(ptp, int) and ptp > 0:
+        updates["prev_target_price"] = ptp
+    elif isinstance(ptp, str):
+        parsed_ptp = parse_price(ptp)
+        if parsed_ptp:
+            updates["prev_target_price"] = parsed_ptp
+
+    return updates
+
+
 async def handle_new_message(event: events.NewMessage.Event) -> None:
     message = event.message
     channel = f"@{event.chat.username}" if event.chat.username else str(event.chat_id)
@@ -102,7 +100,7 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
         pdf_fname = _pdf_filename(message)
         if not pdf_fname:
             return
-        text = pdf_fname  # 파일명을 파싱 텍스트로 사용
+        text = pdf_fname
 
     parsed = parse_message(text, channel, message_id=message.id)
     if parsed is None:
@@ -134,43 +132,77 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
         log.info("s2a_ambiguous_saved", channel=channel, message_id=message.id)
         return
 
-    # broker_report → S2b
+    # broker_report 확정 → 종목 매핑
     if parsed.stock_name and not parsed.stock_code:
         parsed.stock_code = await stock_mapper.get_code(parsed.stock_name)
 
-    # PDF 메타데이터를 S2b 컨텍스트로 제공 (있으면)
-    pdf_meta_ctx = _build_pdf_meta_context(parsed.pdf_url)
-
-    parsed = await extract_metadata(parsed, pdf_meta_context=pdf_meta_ctx)
     parsed.parse_quality = assess_parse_quality(parsed)
 
+    # 1) 먼저 리포트 저장 (PDF path 구성에 report 객체 필요)
     client = get_client()
 
     async with AsyncSessionLocal() as session:
         report, action = await upsert_report(session, parsed)
+        if not report:
+            return
 
-        # Telethon Document PDF 직접 다운로드 (URL 없는 경우)
-        if pdf_fname and report and not report.pdf_path:
+        # 2) PDF 다운로드
+        if pdf_fname and not report.pdf_path:
             rel_path, size_kb = await download_telegram_document(client, message, report)
             if rel_path:
                 await update_pdf_info(session, report.id, rel_path, size_kb, None)
                 report.pdf_path = rel_path
 
-        if report and report.pdf_url and not report.pdf_path:
+        if report.pdf_url and not report.pdf_path:
             rel_path, size_kb = await download_pdf(report)
             if rel_path:
                 await update_pdf_info(session, report.id, rel_path, size_kb, None)
                 report.pdf_path = rel_path
-                analysis = await analyze_pdf(report)
-                if analysis:
-                    await update_ai_fields(
-                        session, report.id,
-                        analysis["summary"],
-                        analysis["sentiment"],
-                        analysis["keywords"],
-                    )
             else:
                 await mark_pdf_failed(session, report.id)
+
+        # 3) Markdown 변환
+        markdown_text = None
+        converter_name = ""
+        if report.pdf_path:
+            abs_path = settings.pdf_base_path / report.pdf_path
+            if abs_path.exists():
+                markdown_text, converter_name = await convert_pdf_to_markdown(abs_path)
+                if markdown_text:
+                    await save_markdown(session, report.id, markdown_text, converter_name)
+
+        # 4) Layer 2 추출 (Sonnet — 메타데이터 + 분석 통합)
+        layer2 = await extract_layer2(
+            text=parsed.raw_text,
+            markdown=markdown_text,
+            channel=channel,
+            report_id=report.id,
+        )
+
+        if layer2:
+            # Layer2 메타로 report 필드 보강
+            from sqlalchemy import update as sa_update
+            from db.models import Report as ReportModel
+            meta_updates = _apply_layer2_meta(report, layer2.meta)
+            if meta_updates:
+                await session.execute(
+                    sa_update(ReportModel)
+                    .where(ReportModel.id == report.id)
+                    .values(**meta_updates)
+                )
+
+            # 분석 결과 저장
+            try:
+                await save_analysis(session, report.id, layer2)
+                await session.commit()
+            except Exception as e:
+                log.warning("analysis_save_failed", report_id=report.id, error=str(e))
+                await session.rollback()
+                async with AsyncSessionLocal() as err_session:
+                    await log_analysis_failure(err_session, report.id, "extract_layer2", str(e))
+                    await err_session.commit()
+        else:
+            await session.commit()
 
 
 async def start_listener() -> None:

@@ -66,6 +66,12 @@ class OverviewStats(BaseModel):
     reports_today: int
     reports_with_pdf: int
     reports_with_ai: int
+    # Layer 2
+    analysis_done: int
+    analysis_pending: int
+    analysis_failed: int
+    analysis_truncated: int
+    analysis_by_category: list[dict]
     top_brokers: list[dict]
     top_stocks: list[dict]
 

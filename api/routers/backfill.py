@@ -2,11 +2,11 @@
 import asyncio
 from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import settings
-from db.models import Channel
+from db.models import Channel, Report
 from db.session import get_session
 
 router = APIRouter(prefix="/backfill", tags=["backfill"])
@@ -80,3 +80,46 @@ async def run_backfill(req: RunRequest, background_tasks: BackgroundTasks, sessi
             started.append(ch)
 
     return RunResponse(started=started, already_running=already_running)
+
+
+class PdfRetryResponse(BaseModel):
+    reset_count: int
+
+
+@router.post("/retry-pdf", response_model=PdfRetryResponse)
+async def retry_failed_pdfs(
+    background_tasks: BackgroundTasks,
+    channel: str | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    """pdf_download_failed=True인 리포트를 재시도 대상으로 리셋."""
+    stmt = (
+        update(Report)
+        .where(Report.pdf_download_failed == True)
+        .where(Report.pdf_url.isnot(None))
+        .values(pdf_download_failed=False)
+    )
+    if channel:
+        stmt = stmt.where(Report.source_channel == channel)
+
+    result = await session.execute(stmt)
+    await session.commit()
+    reset_count = result.rowcount
+
+    # 리셋된 건이 있으면 백그라운드에서 다운로드 시도
+    if reset_count > 0:
+        background_tasks.add_task(_retry_pdf_downloads)
+
+    return PdfRetryResponse(reset_count=reset_count)
+
+
+async def _retry_pdf_downloads() -> None:
+    """리셋된 PDF를 순차 재다운로드."""
+    from db.session import AsyncSessionLocal
+    from storage.pdf_archiver import download_and_archive
+    from storage.report_repo import get_reports_needing_pdf
+
+    async with AsyncSessionLocal() as session:
+        reports = await get_reports_needing_pdf(session, limit=200)
+        for report in reports:
+            await download_and_archive(report, session)

@@ -16,6 +16,7 @@ aiofiles==24.1.0
 
 anthropic>=0.42.0
 pypdf>=4.0.0
+pymupdf4llm>=0.0.17
 
 structlog==24.4.0
 tenacity==9.0.0

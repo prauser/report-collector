@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_timeout: int = 30
 
+    # Layer 2 분석
+    analysis_enabled: bool = True
+    markdown_converter: str = "pymupdf4llm"   # or "marker"
+    analysis_schema_version: str = "v1"
+    analysis_batch_size: int = 10
+
     # API 서버
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
 

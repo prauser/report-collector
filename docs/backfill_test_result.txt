@@ -1,0 +1,148 @@
+2026-03-14 13:00:07 [info     ] backfill_start                 channel=@sunstudy1004 min_id=1019 run_id=20
+2026-03-14 13:00:11 [debug    ] llm_usage_recorded             cost_usd=0.0013664 input_tokens=1148 message_type=ambiguous output_tokens=112 purpose=s2a_classify
+2026-03-14 13:00:11 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:12 [info     ] pending_saved                  channel=@sunstudy1004 id=378 label=ambiguous
+2026-03-14 13:00:14 [debug    ] llm_usage_recorded             cost_usd=0.0012752 input_tokens=1149 message_type=ambiguous output_tokens=89 purpose=s2a_classify
+2026-03-14 13:00:14 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:14 [info     ] pending_saved                  channel=@sunstudy1004 id=379 label=ambiguous
+2026-03-14 13:00:16 [debug    ] llm_usage_recorded             cost_usd=0.0013064 input_tokens=1148 message_type=ambiguous output_tokens=97 purpose=s2a_classify
+2026-03-14 13:00:16 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:17 [info     ] pending_saved                  channel=@sunstudy1004 id=380 label=ambiguous
+2026-03-14 13:00:19 [debug    ] llm_usage_recorded             cost_usd=0.0013176 input_tokens=1147 message_type=ambiguous output_tokens=100 purpose=s2a_classify
+2026-03-14 13:00:19 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:20 [info     ] pending_saved                  channel=@sunstudy1004 id=381 label=ambiguous
+2026-03-14 13:00:22 [debug    ] llm_usage_recorded             cost_usd=0.0012744 input_tokens=1148 message_type=ambiguous output_tokens=89 purpose=s2a_classify
+2026-03-14 13:00:22 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:23 [info     ] pending_saved                  channel=@sunstudy1004 id=382 label=ambiguous
+2026-03-14 13:00:25 [debug    ] llm_usage_recorded             cost_usd=0.0013216 input_tokens=1147 message_type=ambiguous output_tokens=101 purpose=s2a_classify
+2026-03-14 13:00:25 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:25 [info     ] pending_saved                  channel=@sunstudy1004 id=383 label=ambiguous
+2026-03-14 13:00:28 [debug    ] llm_usage_recorded             cost_usd=0.0013224 input_tokens=1148 message_type=ambiguous output_tokens=101 purpose=s2a_classify
+2026-03-14 13:00:28 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:28 [info     ] pending_saved                  channel=@sunstudy1004 id=384 label=ambiguous
+2026-03-14 13:00:30 [debug    ] llm_usage_recorded             cost_usd=0.0013592 input_tokens=1154 message_type=ambiguous output_tokens=109 purpose=s2a_classify
+2026-03-14 13:00:30 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:31 [info     ] pending_saved                  channel=@sunstudy1004 id=385 label=ambiguous
+2026-03-14 13:00:34 [debug    ] llm_usage_recorded             cost_usd=0.0010728 input_tokens=1156 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:00:34 [debug    ] s2a_classified                 channel=@sunstudy1004 type=broker_report
+2026-03-14 13:00:35 [debug    ] llm_usage_recorded             cost_usd=0.0017248 input_tokens=1766 message_type=broker_report output_tokens=78 purpose=s2b_extract
+2026-03-14 13:00:35 [info     ] s2b_extracted                  broker=한화증권 title=I_ElectricalEquip_20190305_Hanwha_521350.pdf
+2026-03-14 13:00:36 [info     ] report_upserted                action=updated broker=한화증권 title=I_ElectricalEquip_20190305_Hanwha_521350.pdf
+2026-03-14 13:00:39 [debug    ] llm_usage_recorded             cost_usd=0.0013264 input_tokens=1153 message_type=ambiguous output_tokens=101 purpose=s2a_classify
+2026-03-14 13:00:39 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:39 [info     ] pending_saved                  channel=@sunstudy1004 id=386 label=ambiguous
+2026-03-14 13:00:41 [debug    ] llm_usage_recorded             cost_usd=0.0013384 input_tokens=1148 message_type=ambiguous output_tokens=105 purpose=s2a_classify
+2026-03-14 13:00:41 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:42 [info     ] pending_saved                  channel=@sunstudy1004 id=387 label=ambiguous
+2026-03-14 13:00:44 [debug    ] llm_usage_recorded             cost_usd=0.0012576 input_tokens=1147 message_type=ambiguous output_tokens=85 purpose=s2a_classify
+2026-03-14 13:00:44 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:45 [info     ] pending_saved                  channel=@sunstudy1004 id=388 label=ambiguous
+2026-03-14 13:00:47 [debug    ] llm_usage_recorded             cost_usd=0.0013536 input_tokens=1147 message_type=ambiguous output_tokens=109 purpose=s2a_classify
+2026-03-14 13:00:47 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:48 [info     ] pending_saved                  channel=@sunstudy1004 id=389 label=ambiguous
+2026-03-14 13:00:50 [debug    ] llm_usage_recorded             cost_usd=0.0012696 input_tokens=1147 message_type=ambiguous output_tokens=88 purpose=s2a_classify
+2026-03-14 13:00:50 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:51 [info     ] pending_saved                  channel=@sunstudy1004 id=390 label=ambiguous
+2026-03-14 13:00:53 [debug    ] llm_usage_recorded             cost_usd=0.0010608 input_tokens=1151 message_type=news output_tokens=35 purpose=s2a_classify
+2026-03-14 13:00:53 [debug    ] s2a_classified                 channel=@sunstudy1004 type=news
+2026-03-14 13:00:55 [debug    ] llm_usage_recorded             cost_usd=0.0012864 input_tokens=1148 message_type=ambiguous output_tokens=92 purpose=s2a_classify
+2026-03-14 13:00:55 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:00:55 [info     ] pending_saved                  channel=@sunstudy1004 id=391 label=ambiguous
+2026-03-14 13:00:59 [debug    ] llm_usage_recorded             cost_usd=0.0013472 input_tokens=1149 message_type=ambiguous output_tokens=107 purpose=s2a_classify
+2026-03-14 13:00:59 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:00 [info     ] pending_saved                  channel=@sunstudy1004 id=392 label=ambiguous
+2026-03-14 13:01:02 [debug    ] llm_usage_recorded             cost_usd=0.0013664 input_tokens=1148 message_type=ambiguous output_tokens=112 purpose=s2a_classify
+2026-03-14 13:01:02 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:03 [info     ] pending_saved                  channel=@sunstudy1004 id=393 label=ambiguous
+2026-03-14 13:01:06 [debug    ] llm_usage_recorded             cost_usd=0.0013104 input_tokens=1148 message_type=ambiguous output_tokens=98 purpose=s2a_classify
+2026-03-14 13:01:06 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:06 [info     ] pending_saved                  channel=@sunstudy1004 id=394 label=ambiguous
+2026-03-14 13:01:08 [debug    ] llm_usage_recorded             cost_usd=0.0013096 input_tokens=1147 message_type=ambiguous output_tokens=98 purpose=s2a_classify
+2026-03-14 13:01:08 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:09 [info     ] pending_saved                  channel=@sunstudy1004 id=395 label=ambiguous
+2026-03-14 13:01:11 [debug    ] llm_usage_recorded             cost_usd=0.0013904 input_tokens=1148 message_type=ambiguous output_tokens=118 purpose=s2a_classify
+2026-03-14 13:01:11 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:12 [info     ] pending_saved                  channel=@sunstudy1004 id=396 label=ambiguous
+2026-03-14 13:01:14 [debug    ] llm_usage_recorded             cost_usd=0.0012856 input_tokens=1147 message_type=ambiguous output_tokens=92 purpose=s2a_classify
+2026-03-14 13:01:14 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:14 [info     ] pending_saved                  channel=@sunstudy1004 id=397 label=ambiguous
+2026-03-14 13:01:17 [debug    ] llm_usage_recorded             cost_usd=0.0013624 input_tokens=1148 message_type=ambiguous output_tokens=111 purpose=s2a_classify
+2026-03-14 13:01:17 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:17 [info     ] pending_saved                  channel=@sunstudy1004 id=398 label=ambiguous
+2026-03-14 13:01:19 [debug    ] llm_usage_recorded             cost_usd=0.0013384 input_tokens=1148 message_type=ambiguous output_tokens=105 purpose=s2a_classify
+2026-03-14 13:01:19 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:20 [info     ] pending_saved                  channel=@sunstudy1004 id=399 label=ambiguous
+2026-03-14 13:01:22 [debug    ] llm_usage_recorded             cost_usd=0.0010672 input_tokens=1149 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:01:22 [debug    ] s2a_classified                 channel=@sunstudy1004 type=broker_report
+2026-03-14 13:01:24 [debug    ] llm_usage_recorded             cost_usd=0.0018312 input_tokens=1759 message_type=broker_report output_tokens=106 purpose=s2b_extract
+2026-03-14 13:01:24 [info     ] s2b_extracted                  broker=하나금융투자 title=기계 산업 분석 보고서
+2026-03-14 13:01:25 [info     ] report_upserted                action=updated broker=하나금융투자 title=기계 산업 분석 보고서
+2026-03-14 13:01:36 [info     ] telegram_pdf_downloaded        path=2019\03\20190307_하나금융투자_산업_기계_하나201937기계pdf.pdf size_kb=1049
+2026-03-14 13:01:39 [debug    ] llm_usage_recorded             cost_usd=0.0010632 input_tokens=1144 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:01:39 [debug    ] s2a_classified                 channel=@sunstudy1004 type=broker_report
+2026-03-14 13:01:41 [debug    ] llm_usage_recorded             cost_usd=0.0019992 input_tokens=1754 message_type=broker_report output_tokens=149 purpose=s2b_extract
+2026-03-14 13:01:41 [info     ] s2b_extracted                  broker=<UNKNOWN> title=<UNKNOWN>
+2026-03-14 13:01:42 [info     ] report_upserted                action=updated broker=<UNKNOWN> title=<UNKNOWN>
+2026-03-14 13:01:44 [debug    ] llm_usage_recorded             cost_usd=0.0013256 input_tokens=1147 message_type=ambiguous output_tokens=102 purpose=s2a_classify
+2026-03-14 13:01:44 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:44 [info     ] pending_saved                  channel=@sunstudy1004 id=400 label=ambiguous
+2026-03-14 13:01:46 [debug    ] llm_usage_recorded             cost_usd=0.00106 input_tokens=1150 message_type=general output_tokens=35 purpose=s2a_classify
+2026-03-14 13:01:46 [debug    ] s2a_classified                 channel=@sunstudy1004 type=general
+2026-03-14 13:01:48 [debug    ] llm_usage_recorded             cost_usd=0.0013144 input_tokens=1148 message_type=ambiguous output_tokens=99 purpose=s2a_classify
+2026-03-14 13:01:48 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:48 [info     ] pending_saved                  channel=@sunstudy1004 id=401 label=ambiguous
+2026-03-14 13:01:51 [debug    ] llm_usage_recorded             cost_usd=0.0012984 input_tokens=1148 message_type=ambiguous output_tokens=95 purpose=s2a_classify
+2026-03-14 13:01:51 [debug    ] s2a_classified                 channel=@sunstudy1004 type=ambiguous
+2026-03-14 13:01:51 [info     ] pending_saved                  channel=@sunstudy1004 id=402 label=ambiguous
+2026-03-14 13:01:54 [info     ] backfill_done                  channel=@sunstudy1004 pending=25 run_id=20 saved=0 skipped=2
+@sunstudy1004: 0건 저장
+2026-03-14 13:01:57 [info     ] backfill_start                 channel=@report_figure_by_offset min_id=None run_id=21
+2026-03-14 13:01:59 [debug    ] llm_usage_recorded             cost_usd=0.0010888 input_tokens=1176 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:01:59 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=broker_report
+2026-03-14 13:02:01 [debug    ] llm_usage_recorded             cost_usd=0.0018488 input_tokens=1786 message_type=broker_report output_tokens=105 purpose=s2b_extract
+2026-03-14 13:02:01 [info     ] s2b_extracted                  broker=대신증권 title=2Q 실적시즌 투자전략 - 실적 선반영 여부와 정도 Check
+2026-03-14 13:02:02 [info     ] report_upserted                action=updated broker=대신증권 title=2Q 실적시즌 투자전략 - 실적 선반영 여부와 정도 Check
+2026-03-14 13:04:36 [info     ] telegram_pdf_downloaded        path=2025\07\20250721_대신증권_기타_2q실적시즌투자전략실적선반영여부와정도chec대신증권25.pdf size_kb=8420
+2026-03-14 13:04:38 [debug    ] llm_usage_recorded             cost_usd=0.0010664 input_tokens=1158 message_type=general output_tokens=35 purpose=s2a_classify
+2026-03-14 13:04:38 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=general
+2026-03-14 13:04:40 [debug    ] llm_usage_recorded             cost_usd=0.0010936 input_tokens=1182 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:04:40 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=broker_report
+2026-03-14 13:04:42 [debug    ] llm_usage_recorded             cost_usd=0.0020296 input_tokens=1792 message_type=broker_report output_tokens=149 purpose=s2b_extract
+2026-03-14 13:04:42 [info     ] s2b_extracted                  broker=퀀트 title=설태현 ETF DeepDive 중진국에서 태어나 선진국에서 은퇴 준비 중
+2026-03-14 13:04:43 [info     ] report_upserted                action=updated broker=퀀트 title=설태현 ETF DeepDive 중진국에서 태어나 선진국에서 은퇴 준비 중
+2026-03-14 13:12:02 [info     ] telegram_pdf_downloaded        path=2025\07\20250721_퀀트_ETF_20250721퀀트설태현etfdeepdive중진국에서태.pdf size_kb=25129
+2026-03-14 13:12:05 [debug    ] llm_usage_recorded             cost_usd=0.001104 input_tokens=1205 message_type=general output_tokens=35 purpose=s2a_classify
+2026-03-14 13:12:05 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=general
+2026-03-14 13:12:06 [debug    ] llm_usage_recorded             cost_usd=0.0010808 input_tokens=1166 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:12:06 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=broker_report
+2026-03-14 13:12:08 [debug    ] llm_usage_recorded             cost_usd=0.0017928 input_tokens=1776 message_type=broker_report output_tokens=93 purpose=s2b_extract
+2026-03-14 13:12:08 [info     ] s2b_extracted                  broker=메리츠증권 title=Vol5 바다 위의 심장 선박엔진
+2026-03-14 13:12:09 [info     ] report_upserted                action=updated broker=메리츠증권 title=Vol5 바다 위의 심장 선박엔진
+2026-03-14 13:13:01 [info     ] telegram_pdf_downloaded        path=2025\07\20250721_메리츠증권_기타_항해vol5바다위의심장선박엔진메리츠증권250721pdf.pdf size_kb=3186
+2026-03-14 13:13:04 [debug    ] llm_usage_recorded             cost_usd=0.001052 input_tokens=1140 message_type=general output_tokens=35 purpose=s2a_classify
+2026-03-14 13:13:04 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=general
+2026-03-14 13:13:05 [debug    ] llm_usage_recorded             cost_usd=0.0010832 input_tokens=1169 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:13:05 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=broker_report
+2026-03-14 13:13:07 [debug    ] llm_usage_recorded             cost_usd=0.0018912 input_tokens=1779 message_type=broker_report output_tokens=117 purpose=s2b_extract
+2026-03-14 13:13:07 [info     ] s2b_extracted                  broker=흥국증권 title=반도체 국가 단위의 AI 수요가 미칠 영향
+2026-03-14 13:13:08 [info     ] report_upserted                action=updated broker=흥국증권 title=반도체 국가 단위의 AI 수요가 미칠 영향
+2026-03-14 13:13:55 [info     ] telegram_pdf_downloaded        path=2025\07\20250721_흥국증권_산업_반도체_반도체국가단위의ai수요가미칠영향흥국증권250721pdf.pdf size_kb=3009
+2026-03-14 13:13:59 [debug    ] llm_usage_recorded             cost_usd=0.0013824 input_tokens=1188 message_type=ambiguous output_tokens=108 purpose=s2a_classify
+2026-03-14 13:13:59 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=ambiguous
+2026-03-14 13:13:59 [info     ] pending_saved                  channel=@report_figure_by_offset id=403 label=ambiguous
+2026-03-14 13:14:01 [debug    ] llm_usage_recorded             cost_usd=0.0010832 input_tokens=1169 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:14:01 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=broker_report
+2026-03-14 13:14:03 [debug    ] llm_usage_recorded             cost_usd=0.0018792 input_tokens=1779 message_type=broker_report output_tokens=114 purpose=s2b_extract
+2026-03-14 13:14:03 [info     ] s2b_extracted                  broker=삼성증권 title=주간 투자 전략 한국의 주도주 지금
+2026-03-14 13:14:04 [info     ] report_upserted                action=updated broker=삼성증권 title=주간 투자 전략 한국의 주도주 지금
+2026-03-14 13:14:21 [info     ] telegram_pdf_downloaded        path=2025\07\20250721_삼성증권_기타_주간투자전략한국의주도주지금조방원삼성증권250721pdf.pdf size_kb=1318
+2026-03-14 13:14:23 [debug    ] llm_usage_recorded             cost_usd=0.0010656 input_tokens=1157 message_type=news output_tokens=35 purpose=s2a_classify
+2026-03-14 13:14:23 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=news
+2026-03-14 13:14:25 [debug    ] llm_usage_recorded             cost_usd=0.0010832 input_tokens=1169 message_type=broker_report output_tokens=37 purpose=s2a_classify
+2026-03-14 13:14:25 [debug    ] s2a_classified                 channel=@report_figure_by_offset type=broker_report
+2026-03-14 13:14:26 [debug    ] llm_usage_recorded             cost_usd=0.0018192 input_tokens=1779 message_type=broker_report output_tokens=99 purpose=s2b_extract
+2026-03-14 13:14:26 [info     ] s2b_extracted                  broker=삼성증권 title=2Q 프리뷰 주주환원율 50% 시대의 개막
+2026-03-14 13:14:27 [info     ] report_upserted                action=updated broker=삼성증권 title=2Q 프리뷰 주주환원율 50% 시대의 개막
+2026-03-14 13:14:53 [info     ] telegram_pdf_downloaded        path=2025\07\20250721_삼성증권_기타_2q프리뷰주주환원율50시대의개막삼성증권250721pdf.pdf size_kb=2586
+2026-03-14 13:14:56 [info     ] backfill_done                  channel=@report_figure_by_offset pending=1 run_id=21 saved=0 skipped=4
+@report_figure_by_offset: 0건 저장

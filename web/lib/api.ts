@@ -54,6 +54,11 @@ export interface OverviewStats {
   reports_today: number;
   reports_with_pdf: number;
   reports_with_ai: number;
+  analysis_done: number;
+  analysis_pending: number;
+  analysis_failed: number;
+  analysis_truncated: number;
+  analysis_by_category: { category: string; count: number }[];
   top_brokers: { broker: string; count: number }[];
   top_stocks: { stock: string; count: number }[];
 }
@@ -99,6 +104,14 @@ export interface BackfillRunItem {
   n_pending: number;
   n_skipped: number;
   status: string;
+  error_msg: string | null;
+}
+
+export interface ParseQuality {
+  good: number;
+  partial: number;
+  poor: number;
+  unknown: number;
 }
 
 export interface PdfCoverage {
@@ -107,6 +120,8 @@ export interface PdfCoverage {
   has_pdf_url: number;
   pdf_downloaded: number;
   ai_analyzed: number;
+  pdf_failed: number;
+  parse_quality: ParseQuality;
 }
 
 export interface BackfillStats {

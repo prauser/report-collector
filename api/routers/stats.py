@@ -8,7 +8,7 @@ from sqlalchemy.types import Date
 
 from api.deps import get_db
 from api.schemas import LlmStats, LlmUsageStat, OverviewStats
-from db.models import BackfillRun, Channel, LlmUsage, Report
+from db.models import BackfillRun, Channel, LlmUsage, Report, ReportAnalysis
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -38,6 +38,27 @@ async def get_overview(db: AsyncSession = Depends(get_db)):
         )
     ).all()
 
+    # Layer 2 분석 상태
+    analysis_done = await db.scalar(
+        select(func.count(Report.id)).where(Report.analysis_status == "done")
+    ) or 0
+    analysis_failed = await db.scalar(
+        select(func.count(Report.id)).where(Report.analysis_status == "failed")
+    ) or 0
+    analysis_truncated = await db.scalar(
+        select(func.count(Report.id)).where(Report.analysis_status == "truncated")
+    ) or 0
+    analysis_pending = (total or 0) - analysis_done - analysis_failed - analysis_truncated
+
+    # Layer 2 카테고리 분포
+    cat_rows = (
+        await db.execute(
+            select(ReportAnalysis.report_category, func.count(ReportAnalysis.id))
+            .group_by(ReportAnalysis.report_category)
+            .order_by(func.count(ReportAnalysis.id).desc())
+        )
+    ).all()
+
     # 상위 10개 종목 (최근 30일)
     stock_rows = (
         await db.execute(
@@ -55,6 +76,11 @@ async def get_overview(db: AsyncSession = Depends(get_db)):
         reports_today=today_count or 0,
         reports_with_pdf=pdf_count or 0,
         reports_with_ai=ai_count or 0,
+        analysis_done=analysis_done,
+        analysis_pending=analysis_pending,
+        analysis_failed=analysis_failed,
+        analysis_truncated=analysis_truncated,
+        analysis_by_category=[{"category": r[0], "count": r[1]} for r in cat_rows],
         top_brokers=[{"broker": r[0], "count": r[1]} for r in broker_rows],
         top_stocks=[{"stock": r[0], "count": r[1]} for r in stock_rows],
     )
@@ -189,6 +215,7 @@ async def get_backfill_stats(db: AsyncSession = Depends(get_db)):
                 BackfillRun.n_pending,
                 BackfillRun.n_skipped,
                 BackfillRun.status,
+                BackfillRun.error_msg,
             )
             .order_by(BackfillRun.started_at.desc())
             .limit(20)
@@ -209,6 +236,40 @@ async def get_backfill_stats(db: AsyncSession = Depends(get_db)):
             .order_by(Report.source_channel)
         )
     ).all()
+
+    # parse_quality 분포
+    quality_rows = (
+        await db.execute(
+            select(
+                Report.source_channel,
+                Report.parse_quality,
+                func.count(Report.id).label("cnt"),
+            )
+            .group_by(Report.source_channel, Report.parse_quality)
+            .order_by(Report.source_channel)
+        )
+    ).all()
+
+    # 채널별로 그룹핑
+    quality_map: dict[str, dict[str, int]] = {}
+    for r in quality_rows:
+        ch = r.source_channel
+        q = r.parse_quality or "unknown"
+        quality_map.setdefault(ch, {"good": 0, "partial": 0, "poor": 0, "unknown": 0})
+        quality_map[ch][q] = r.cnt
+
+    # pdf_download_failed 건수 (채널별)
+    pdf_failed_rows = (
+        await db.execute(
+            select(
+                Report.source_channel,
+                func.count(Report.id).label("cnt"),
+            )
+            .where(Report.pdf_download_failed == True)
+            .group_by(Report.source_channel)
+        )
+    ).all()
+    pdf_failed_map = {r.source_channel: r.cnt for r in pdf_failed_rows}
 
     return {
         "by_channel": [
@@ -239,6 +300,7 @@ async def get_backfill_stats(db: AsyncSession = Depends(get_db)):
                 "n_pending": r.n_pending,
                 "n_skipped": r.n_skipped,
                 "status": r.status,
+                "error_msg": r.error_msg,
             }
             for r in history_rows
         ],
@@ -249,6 +311,8 @@ async def get_backfill_stats(db: AsyncSession = Depends(get_db)):
                 "has_pdf_url": r.has_pdf_url,
                 "pdf_downloaded": r.pdf_downloaded,
                 "ai_analyzed": r.ai_analyzed,
+                "pdf_failed": pdf_failed_map.get(r.source_channel, 0),
+                "parse_quality": quality_map.get(r.source_channel, {"good": 0, "partial": 0, "poor": 0, "unknown": 0}),
             }
             for r in coverage_rows
         ],

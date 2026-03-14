@@ -38,6 +38,60 @@ export default async function StatsPage() {
         </div>
       </section>
 
+      {/* Layer 2 분석 현황 */}
+      <section>
+        <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-3">Layer 2 분석</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-4">
+          <StatCard
+            label="분석 완료"
+            value={overview.analysis_done}
+            sub={`${Math.round(overview.analysis_done / Math.max(overview.total_reports, 1) * 100)}%`}
+          />
+          <StatCard label="대기중" value={overview.analysis_pending} />
+          <StatCard
+            label="Truncated"
+            value={overview.analysis_truncated}
+            sub="30K자 초과 (수동 검토 필요)"
+          />
+          <StatCard label="실패" value={overview.analysis_failed} />
+          <StatCard
+            label="총 비용 (Layer2)"
+            value={`$${parseFloat(
+              (llm.by_purpose.find((r) => r.purpose === "layer2_extract")?.total_cost_usd ?? "0")
+            ).toFixed(2)}`}
+            sub={`${llm.by_purpose.find((r) => r.purpose === "layer2_extract")?.call_count ?? 0}건 호출`}
+          />
+        </div>
+        {overview.analysis_by_category.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-medium text-gray-700 mb-4">카테고리 분포</h3>
+            <div className="space-y-3">
+              {[
+                { key: "stock", label: "종목 분석", color: "bg-blue-500" },
+                { key: "industry", label: "산업 분석", color: "bg-emerald-500" },
+                { key: "macro", label: "매크로", color: "bg-purple-500" },
+              ].map(({ key, label, color }) => {
+                const row = overview.analysis_by_category.find((c) => c.category === key);
+                const cnt = row?.count ?? 0;
+                const total = overview.analysis_done || 1;
+                const pct = Math.round((cnt / total) * 100);
+                return (
+                  <div key={key}>
+                    <div className="flex items-center justify-between text-sm mb-1">
+                      <span className="text-gray-700">{label}</span>
+                      <span className="text-gray-500">{cnt.toLocaleString()}건 ({pct}%)</span>
+                    </div>
+                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                      <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </section>
+
       {/* 증권사 / 종목 Top 10 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-gray-200 p-5">
