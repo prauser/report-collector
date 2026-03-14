@@ -16,7 +16,8 @@ _running: set[str] = set()
 
 
 class RunRequest(BaseModel):
-    channel: str  # 채널명 또는 "all"
+    channel: str          # 채널명 또는 "all"
+    limit: int | None = None  # None = settings.backfill_limit 사용, 0 = 전체
 
 
 class RunResponse(BaseModel):
@@ -24,7 +25,7 @@ class RunResponse(BaseModel):
     already_running: list[str]
 
 
-async def _run_backfill(channel: str) -> None:
+async def _run_backfill(channel: str, limit: int | None = None) -> None:
     """백그라운드에서 백필 실행."""
     try:
         from collector.backfill import backfill_channel
@@ -33,7 +34,7 @@ async def _run_backfill(channel: str) -> None:
         client = get_client()
         if not client.is_connected():
             await client.start()
-        await backfill_channel(channel)
+        await backfill_channel(channel, limit=limit)
     except Exception:
         pass  # 에러는 BackfillRun 레코드에 기록됨
     finally:
@@ -75,7 +76,7 @@ async def run_backfill(req: RunRequest, background_tasks: BackgroundTasks, sessi
             already_running.append(ch)
         else:
             _running.add(ch)
-            background_tasks.add_task(_run_backfill, ch)
+            background_tasks.add_task(_run_backfill, ch, req.limit)
             started.append(ch)
 
     return RunResponse(started=started, already_running=already_running)

@@ -37,11 +37,11 @@ function Bar({ value, max, color }: { value: number; max: number; color: string 
   );
 }
 
-async function triggerBackfill(channel: string): Promise<{ started: string[]; already_running: string[] }> {
+async function triggerBackfill(channel: string, limit: number | null): Promise<{ started: string[]; already_running: string[] }> {
   const res = await fetch(`${BASE}/api/backfill/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channel }),
+    body: JSON.stringify({ channel, limit }),
   });
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
@@ -59,6 +59,7 @@ export default function BackfillPage() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState<string[]>([]);
   const [triggering, setTriggering] = useState<string | null>(null);
+  const [limitInput, setLimitInput] = useState("1000"); // 0 = 전체
 
   const refresh = useCallback(() => {
     Promise.all([
@@ -81,10 +82,16 @@ export default function BackfillPage() {
     return () => clearInterval(timer);
   }, [running, refresh]);
 
+  const parsedLimit = (): number | null => {
+    const n = parseInt(limitInput);
+    if (isNaN(n) || n < 0) return null;
+    return n === 0 ? null : n; // 0 입력 → null (전체)
+  };
+
   const handleRun = async (channel: string) => {
     setTriggering(channel);
     try {
-      await triggerBackfill(channel);
+      await triggerBackfill(channel, parsedLimit());
       await new Promise((r) => setTimeout(r, 500));
       refresh();
     } catch (e) {
@@ -97,7 +104,7 @@ export default function BackfillPage() {
   const handleRunAll = async () => {
     setTriggering("all");
     try {
-      await triggerBackfill("all");
+      await triggerBackfill("all", parsedLimit());
       await new Promise((r) => setTimeout(r, 500));
       refresh();
     } catch (e) {
@@ -120,6 +127,18 @@ export default function BackfillPage() {
               ● {running.length}개 채널 실행 중
             </span>
           )}
+          <div className="flex items-center gap-1 text-sm">
+            <label className="text-gray-500 text-xs">개수</label>
+            <input
+              type="number"
+              min="0"
+              value={limitInput}
+              onChange={(e) => setLimitInput(e.target.value)}
+              className="w-20 border rounded px-2 py-1 text-sm text-center"
+              title="0 = 전체"
+            />
+            <span className="text-gray-400 text-xs">(0=전체)</span>
+          </div>
           <button
             onClick={handleRunAll}
             disabled={triggering !== null}

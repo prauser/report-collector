@@ -1,6 +1,7 @@
 """실시간 메시지 수신 - Telethon event handler."""
 import structlog
 from telethon import events
+from telethon.tl.types import MessageMediaDocument, DocumentAttributeFilename
 
 from collector.telegram_client import get_client
 from config.settings import settings
@@ -10,7 +11,7 @@ from storage import stock_mapper
 from parser.llm_parser import classify_message, extract_metadata
 from parser.quality import assess_parse_quality
 from parser.pdf_analyzer import analyze_pdf
-from storage.pdf_archiver import download_pdf
+from storage.pdf_archiver import download_pdf, download_telegram_document
 from storage.pending_repo import save_pending
 from storage.report_repo import mark_pdf_failed, update_ai_fields, update_pdf_info, upsert_report
 
@@ -78,13 +79,30 @@ def _build_pdf_meta_context(pdf_url: str | None) -> str | None:
         return None
 
 
+def _pdf_filename(message) -> str | None:
+    """Document 타입 PDF 메시지에서 파일명 추출. PDF가 아니면 None."""
+    if not isinstance(message.media, MessageMediaDocument):
+        return None
+    doc = message.media.document
+    if "pdf" not in getattr(doc, "mime_type", ""):
+        return None
+    for attr in doc.attributes or []:
+        if isinstance(attr, DocumentAttributeFilename):
+            return attr.file_name
+    return None
+
+
 async def handle_new_message(event: events.NewMessage.Event) -> None:
     message = event.message
     channel = f"@{event.chat.username}" if event.chat.username else str(event.chat_id)
 
     text = message.text or ""
+    pdf_fname = None
     if not text.strip():
-        return
+        pdf_fname = _pdf_filename(message)
+        if not pdf_fname:
+            return
+        text = pdf_fname  # 파일명을 파싱 텍스트로 사용
 
     parsed = parse_message(text, channel, message_id=message.id)
     if parsed is None:
@@ -126,8 +144,17 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
     parsed = await extract_metadata(parsed, pdf_meta_context=pdf_meta_ctx)
     parsed.parse_quality = assess_parse_quality(parsed)
 
+    client = get_client()
+
     async with AsyncSessionLocal() as session:
         report, action = await upsert_report(session, parsed)
+
+        # Telethon Document PDF 직접 다운로드 (URL 없는 경우)
+        if pdf_fname and report and not report.pdf_path:
+            rel_path, size_kb = await download_telegram_document(client, message, report)
+            if rel_path:
+                await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                report.pdf_path = rel_path
 
         if report and report.pdf_url and not report.pdf_path:
             rel_path, size_kb = await download_pdf(report)

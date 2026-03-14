@@ -3,7 +3,7 @@ import asyncio
 import structlog
 from datetime import date, datetime, timezone
 from telethon.errors import FloodWaitError
-from telethon.tl.types import Message
+from telethon.tl.types import Message, MessageMediaDocument, DocumentAttributeFilename
 
 from collector.telegram_client import get_client
 from config.settings import settings
@@ -14,10 +14,24 @@ from storage import stock_mapper
 from parser.llm_parser import classify_message, extract_metadata
 from parser.quality import assess_parse_quality
 from storage.pending_repo import save_pending
-from storage.report_repo import upsert_report
+from storage.pdf_archiver import download_telegram_document
+from storage.report_repo import update_pdf_info, upsert_report
 from sqlalchemy import select
 
 log = structlog.get_logger(__name__)
+
+
+def _pdf_filename(message: Message) -> str | None:
+    """Document 타입 PDF 메시지에서 파일명 추출. PDF가 아니면 None."""
+    if not isinstance(message.media, MessageMediaDocument):
+        return None
+    doc = message.media.document
+    if "pdf" not in getattr(doc, "mime_type", ""):
+        return None
+    for attr in doc.attributes or []:
+        if isinstance(attr, DocumentAttributeFilename):
+            return attr.file_name
+    return None
 
 
 async def backfill_channel(channel_username: str, limit: int | None = None) -> int:
@@ -60,12 +74,20 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
             min_id=min_id or 0,
             reverse=True,
         ):
-            if not isinstance(message, Message) or not message.text:
+            if not isinstance(message, Message):
                 continue
+
+            text = message.text or ""
+            pdf_fname = None
+            if not text:
+                pdf_fname = _pdf_filename(message)
+                if not pdf_fname:
+                    continue  # 텍스트도 없고 PDF Document도 아님
+                text = pdf_fname  # 파일명을 파싱 텍스트로 사용
 
             n_scanned += 1
 
-            parsed = parse_message(message.text, channel_username, message_id=message.id)
+            parsed = parse_message(text, channel_username, message_id=message.id)
             if parsed is None:
                 n_skipped += 1
                 continue
@@ -104,9 +126,16 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
             parsed.parse_quality = assess_parse_quality(parsed)
 
             async with AsyncSessionLocal() as session:
-                _, action = await upsert_report(session, parsed)
+                report, action = await upsert_report(session, parsed)
                 if action == "inserted":
                     n_saved += 1
+
+            # Telethon Document PDF 직접 다운로드 (URL 없는 경우)
+            if pdf_fname and report and not report.pdf_path:
+                rel_path, size_kb = await download_telegram_document(client, message, report)
+                if rel_path:
+                    async with AsyncSessionLocal() as session:
+                        await update_pdf_info(session, report.id, rel_path, size_kb, None)
 
             last_id = message.id
 

@@ -86,6 +86,25 @@ def get_page_count(path: Path) -> int | None:
         return None
 
 
+async def download_telegram_document(client, message, report: Report) -> tuple[str | None, int | None]:
+    """
+    텔레그램 Document (PDF) 를 Telethon으로 직접 다운로드.
+    Returns: (상대경로, kb크기) or (None, None) on failure
+    """
+    rel_path = build_pdf_path(report)
+    abs_path = settings.pdf_base_path / rel_path
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        await client.download_media(message, file=str(abs_path))
+        size_kb = abs_path.stat().st_size // 1024
+        log.info("telegram_pdf_downloaded", path=str(rel_path), size_kb=size_kb)
+        return str(rel_path), size_kb
+    except Exception as e:
+        log.warning("telegram_pdf_download_failed", error=str(e))
+        return None, None
+
+
 async def download_and_archive(report: Report, session) -> bool:
     """PDF 다운로드 + page_count 추출 + DB 업데이트."""
     from storage.report_repo import mark_pdf_failed, update_pdf_info
