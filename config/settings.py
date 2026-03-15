@@ -1,5 +1,7 @@
 from pathlib import Path
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Annotated
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -8,6 +10,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         env_list_separator=",",
+        env_ignore_empty=True,
     )
 
     # Telegram (리스너 전용 - API 서버에서는 불필요)
@@ -15,12 +18,21 @@ class Settings(BaseSettings):
     telegram_api_hash: str = ""
     telegram_session_name: str = "report_collector"
     telegram_session_string: str | None = None  # Railway용 StringSession
-    telegram_channels: list[str] = [
+    telegram_channels: Annotated[list[str], NoDecode] = [
         "@repostory123",
         "@companyreport",
         "@searfin",
         "@cb_eq_research",
     ]
+
+    @field_validator("telegram_channels", mode="before")
+    @classmethod
+    def _parse_channels(cls, v):
+        if not v:
+            return []
+        if isinstance(v, str):
+            return [c.strip() for c in v.split(",") if c.strip()]
+        return v
 
     # PostgreSQL - DATABASE_URL (Railway 표준) 또는 개별 설정
     database_url: str | None = None  # Railway가 자동으로 DATABASE_URL 주입
