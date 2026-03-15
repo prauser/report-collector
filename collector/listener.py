@@ -120,7 +120,7 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
             log.debug("s2a_filtered", type=s2a.message_type, channel=channel)
             continue
 
-        if s2a.message_type == "ambiguous":
+        if s2a.message_type == "ambiguous" and not parsed.pdf_url:
             async with AsyncSessionLocal() as session:
                 await save_pending(
                     session,

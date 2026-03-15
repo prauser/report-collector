@@ -77,7 +77,7 @@ async def _process_single_report(task: _ReportTask, semaphore: asyncio.Semaphore
         if s2a.message_type in ("news", "general"):
             return _ReportResult("skipped", message.id)
 
-        if s2a.message_type == "ambiguous":
+        if s2a.message_type == "ambiguous" and not parsed.pdf_url:
             async with AsyncSessionLocal() as session:
                 await save_pending(
                     session,
@@ -91,7 +91,7 @@ async def _process_single_report(task: _ReportTask, semaphore: asyncio.Semaphore
                 await session.commit()
             return _ReportResult("pending", message.id)
 
-        # broker_report 확정
+        # broker_report 확정 (ambiguous여도 pdf_url 있으면 계속 처리)
         if parsed.stock_name and not parsed.stock_code:
             parsed.stock_code = await stock_mapper.get_code(parsed.stock_name)
 
