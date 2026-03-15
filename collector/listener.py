@@ -3,12 +3,15 @@
 파이프라인:
   S2a(분류) → DB저장 → PDF다운 → Markdown변환 → Layer2 추출(Sonnet) → DB(분석 저장)
 """
+import time
 import structlog
+from sqlalchemy import select
 from telethon import events
 from telethon.tl.types import MessageMediaDocument, DocumentAttributeFilename
 
 from collector.telegram_client import get_client
 from config.settings import settings
+from db.models import Channel
 from db.session import AsyncSessionLocal
 from parser.registry import parse_messages
 from parser.llm_parser import classify_message
@@ -23,6 +26,21 @@ from storage.report_repo import mark_pdf_failed, update_pdf_info, upsert_report
 from storage.analysis_repo import save_markdown, save_analysis, log_analysis_failure
 
 log = structlog.get_logger(__name__)
+
+_CHANNEL_CACHE: set[str] = set()
+_CHANNEL_CACHE_TTL = 60  # 초
+_channel_cache_at: float = 0.0
+
+
+async def _get_active_channels() -> set[str]:
+    global _CHANNEL_CACHE, _channel_cache_at
+    if time.monotonic() - _channel_cache_at < _CHANNEL_CACHE_TTL:
+        return _CHANNEL_CACHE
+    async with AsyncSessionLocal() as s:
+        rows = (await s.scalars(select(Channel.channel_username).where(Channel.is_active == True))).all()
+    _CHANNEL_CACHE = set(rows) if rows else set(settings.telegram_channels)
+    _channel_cache_at = time.monotonic()
+    return _CHANNEL_CACHE
 
 
 def _pdf_filename(message) -> str | None:
@@ -93,6 +111,10 @@ def _apply_layer2_meta(report, meta: dict, session_needed: bool = False) -> dict
 async def handle_new_message(event: events.NewMessage.Event) -> None:
     message = event.message
     channel = f"@{event.chat.username}" if event.chat.username else str(event.chat_id)
+
+    active = await _get_active_channels()
+    if channel not in active:
+        return
 
     text = message.text or ""
     pdf_fname = None
@@ -209,19 +231,10 @@ async def start_listener() -> None:
     client = get_client()
     await client.start()
 
-    from sqlalchemy import select
-    from db.models import Channel
-    async with AsyncSessionLocal() as session:
-        rows = (await session.scalars(
-            select(Channel.channel_username).where(Channel.is_active == True)
-        )).all()
-    channels = list(rows) if rows else settings.telegram_channels
-    log.info("listener_starting", channels=channels)
+    channels = await _get_active_channels()
+    log.info("listener_starting", channels=list(channels))
 
-    client.add_event_handler(
-        handle_new_message,
-        events.NewMessage(chats=channels),
-    )
+    client.add_event_handler(handle_new_message, events.NewMessage())
 
     log.info("listener_running")
     await client.run_until_disconnected()
