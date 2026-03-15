@@ -317,8 +317,10 @@ async def extract_layer2(
 
     # 컨텍스트 구성
     _MD_LIMIT = 30_000
+    _TEXT_LIMIT_WITH_MD = 500  # markdown 있으면 메시지 원문은 메타용으로만
     parts = [f"[채널: {channel}]"]
-    parts.append(f"\n[텔레그램 메시지]\n{text}")
+    text_for_llm = text[:_TEXT_LIMIT_WITH_MD] if markdown else text
+    parts.append(f"\n[텔레그램 메시지]\n{text_for_llm}")
     md_was_truncated = False
     md_original_chars = 0
     if markdown:
