@@ -2,6 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import date, datetime, timezone
+from contextlib import asynccontextmanager
 
 
 def make_mock_message(text: str, msg_id: int = 1, dt: datetime = None):
@@ -13,6 +14,27 @@ def make_mock_message(text: str, msg_id: int = 1, dt: datetime = None):
     msg.date = dt or datetime(2026, 3, 7, 9, 0, tzinfo=timezone.utc)
     msg.media = None
     return msg
+
+
+def make_mock_db_session():
+    """AsyncSessionLocal 을 대체할 async context manager mock."""
+    mock_run = MagicMock()
+    mock_run.id = 42
+
+    mock_session = AsyncMock()
+    mock_session.scalar = AsyncMock(return_value=None)   # channel_row 없음
+    mock_session.get = AsyncMock(return_value=mock_run)  # BackfillRun 조회
+    mock_session.add = MagicMock()
+    mock_session.commit = AsyncMock()
+    mock_session.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "id", 42))
+    mock_session.execute = AsyncMock()
+    mock_session.rollback = AsyncMock()
+
+    @asynccontextmanager
+    async def _ctx():
+        yield mock_session
+
+    return _ctx, mock_session
 
 
 @pytest.mark.asyncio
@@ -30,8 +52,10 @@ async def test_backfill_saves_parsed_messages():
             yield m
 
     mock_report = MagicMock(id=1, pdf_url="https://example.com/report.pdf", pdf_path=None)
+    mock_session_ctx, _ = make_mock_db_session()
 
     with patch("collector.backfill.get_client") as mock_get_client, \
+         patch("collector.backfill.AsyncSessionLocal", mock_session_ctx), \
          patch("collector.backfill.upsert_report", new_callable=AsyncMock) as mock_upsert, \
          patch("collector.backfill.stock_mapper") as mock_mapper, \
          patch("collector.backfill.classify_message", new_callable=AsyncMock) as mock_s2a, \
@@ -65,7 +89,10 @@ async def test_backfill_skips_empty_messages():
         for m in [msg]:
             yield m
 
+    mock_session_ctx, _ = make_mock_db_session()
+
     with patch("collector.backfill.get_client") as mock_get_client, \
+         patch("collector.backfill.AsyncSessionLocal", mock_session_ctx), \
          patch("collector.backfill.upsert_report", new_callable=AsyncMock) as mock_upsert:
 
         mock_client = AsyncMock()
@@ -88,7 +115,10 @@ async def test_backfill_filters_news():
         for m in [msg]:
             yield m
 
+    mock_session_ctx, _ = make_mock_db_session()
+
     with patch("collector.backfill.get_client") as mock_get_client, \
+         patch("collector.backfill.AsyncSessionLocal", mock_session_ctx), \
          patch("collector.backfill.upsert_report", new_callable=AsyncMock) as mock_upsert, \
          patch("collector.backfill.classify_message", new_callable=AsyncMock) as mock_s2a:
 
@@ -115,7 +145,10 @@ async def test_flood_wait_handled():
         raise FloodWaitError(request=None, capture=1)
         yield  # make it a generator
 
+    mock_session_ctx, _ = make_mock_db_session()
+
     with patch("collector.backfill.get_client") as mock_get_client, \
+         patch("collector.backfill.AsyncSessionLocal", mock_session_ctx), \
          patch("asyncio.sleep", new_callable=AsyncMock):
 
         mock_client = AsyncMock()
