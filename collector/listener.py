@@ -209,7 +209,13 @@ async def start_listener() -> None:
     client = get_client()
     await client.start()
 
-    channels = settings.telegram_channels
+    from sqlalchemy import select
+    from db.models import Channel
+    async with AsyncSessionLocal() as session:
+        rows = (await session.scalars(
+            select(Channel.channel_username).where(Channel.is_active == True)
+        )).all()
+    channels = list(rows) if rows else settings.telegram_channels
     log.info("listener_starting", channels=channels)
 
     client.add_event_handler(
