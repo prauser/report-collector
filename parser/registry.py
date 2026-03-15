@@ -21,3 +21,14 @@ def parse_message(message_text: str, channel: str, message_id: int | None = None
             if result is not None:
                 return result
     return None
+
+
+def parse_messages(message_text: str, channel: str, message_id: int | None = None) -> list[ParsedReport]:
+    """메시지를 파싱해 ParsedReport 목록 반환. 다이제스트는 여러 건으로 분리."""
+    for parser in _PARSERS:
+        if parser.can_parse(channel):
+            if hasattr(parser, "parse_multiple"):
+                return parser.parse_multiple(message_text, channel, message_id)
+            result = parser.parse(message_text, channel, message_id)
+            return [result] if result is not None else []
+    return []

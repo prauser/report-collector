@@ -13,7 +13,7 @@ from collector.telegram_client import get_client
 from config.settings import settings
 from db.session import AsyncSessionLocal
 from db.models import BackfillRun, Channel
-from parser.registry import parse_message
+from parser.registry import parse_messages
 from storage import stock_mapper
 from parser.llm_parser import classify_message
 from parser.quality import assess_parse_quality
@@ -95,102 +95,102 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
 
             n_scanned += 1
 
-            parsed = parse_message(text, channel_username, message_id=message.id)
-            if parsed is None:
+            parsed_list = parse_messages(text, channel_username, message_id=message.id)
+            if not parsed_list:
                 n_skipped += 1
                 continue
 
-            if parsed.report_date is None or parsed.report_date == date.today():
-                parsed.report_date = message.date.date()
+            for parsed in parsed_list:
+                if parsed.report_date is None or parsed.report_date == date.today():
+                    parsed.report_date = message.date.date()
 
-            # S2a: 분류
-            s2a = await classify_message(parsed)
+                # S2a: 분류
+                s2a = await classify_message(parsed)
 
-            if s2a.message_type in ("news", "general"):
-                n_skipped += 1
-                continue
+                if s2a.message_type in ("news", "general"):
+                    n_skipped += 1
+                    continue
 
-            if s2a.message_type == "ambiguous":
+                if s2a.message_type == "ambiguous":
+                    async with AsyncSessionLocal() as session:
+                        await save_pending(
+                            session,
+                            source_channel=channel_username,
+                            source_message_id=message.id,
+                            raw_text=parsed.raw_text,
+                            pdf_url=parsed.pdf_url,
+                            s2a_label="ambiguous",
+                            s2a_reason=s2a.reason,
+                        )
+                        await session.commit()
+                    n_pending += 1
+                    continue
+
+                # broker_report 확정
+                if parsed.stock_name and not parsed.stock_code:
+                    parsed.stock_code = await stock_mapper.get_code(parsed.stock_name)
+
+                parsed.parse_quality = assess_parse_quality(parsed)
+
                 async with AsyncSessionLocal() as session:
-                    await save_pending(
-                        session,
-                        source_channel=channel_username,
-                        source_message_id=message.id,
-                        raw_text=parsed.raw_text,
-                        pdf_url=parsed.pdf_url,
-                        s2a_label="ambiguous",
-                        s2a_reason=s2a.reason,
-                    )
-                    await session.commit()
-                n_pending += 1
-                last_id = message.id
-                continue
+                    # 1) 리포트 저장
+                    report, action = await upsert_report(session, parsed)
+                    if action == "inserted":
+                        n_saved += 1
 
-            # broker_report 확정
-            if parsed.stock_name and not parsed.stock_code:
-                parsed.stock_code = await stock_mapper.get_code(parsed.stock_name)
+                    if report:
+                        # 2) PDF 다운로드 (다이제스트는 URL별 개별 다운로드, 첨부파일은 원본 메시지 공유)
+                        if pdf_fname and not report.pdf_path:
+                            rel_path, size_kb = await download_telegram_document(client, message, report)
+                            if rel_path:
+                                await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                                report.pdf_path = rel_path
+                        elif report.pdf_url and not report.pdf_path:
+                            rel_path, size_kb = await download_pdf(report)
+                            if rel_path:
+                                await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                                report.pdf_path = rel_path
+                            else:
+                                await mark_pdf_failed(session, report.id)
 
-            parsed.parse_quality = assess_parse_quality(parsed)
+                        # 3) Markdown 변환
+                        markdown_text = None
+                        converter_name = ""
+                        if report.pdf_path:
+                            abs_path = settings.pdf_base_path / report.pdf_path
+                            if abs_path.exists():
+                                markdown_text, converter_name = await convert_pdf_to_markdown(abs_path)
+                                if markdown_text:
+                                    await save_markdown(session, report.id, markdown_text, converter_name)
 
-            async with AsyncSessionLocal() as session:
-                # 1) 리포트 저장
-                report, action = await upsert_report(session, parsed)
-                if action == "inserted":
-                    n_saved += 1
+                        # 4) Layer 2 추출
+                        layer2 = await extract_layer2(
+                            text=parsed.raw_text,
+                            markdown=markdown_text,
+                            channel=channel_username,
+                            report_id=report.id,
+                        )
 
-                if report:
-                    # 2) PDF 다운로드
-                    if pdf_fname and not report.pdf_path:
-                        rel_path, size_kb = await download_telegram_document(client, message, report)
-                        if rel_path:
-                            await update_pdf_info(session, report.id, rel_path, size_kb, None)
-                            report.pdf_path = rel_path
-                    elif report.pdf_url and not report.pdf_path:
-                        rel_path, size_kb = await download_pdf(report)
-                        if rel_path:
-                            await update_pdf_info(session, report.id, rel_path, size_kb, None)
-                            report.pdf_path = rel_path
-                        else:
-                            await mark_pdf_failed(session, report.id)
+                        if layer2:
+                            from db.models import Report as ReportModel
+                            meta_updates = _apply_layer2_meta(report, layer2.meta)
+                            if meta_updates:
+                                await session.execute(
+                                    sa_update(ReportModel)
+                                    .where(ReportModel.id == report.id)
+                                    .values(**meta_updates)
+                                )
+                            try:
+                                await save_analysis(session, report.id, layer2)
+                            except Exception as e:
+                                log.warning("analysis_save_failed", report_id=report.id, error=str(e))
+                                await session.rollback()
+                                async with AsyncSessionLocal() as err_session:
+                                    await log_analysis_failure(err_session, report.id, "extract_layer2", str(e))
+                                    await err_session.commit()
+                                continue
 
-                    # 3) Markdown 변환
-                    markdown_text = None
-                    converter_name = ""
-                    if report.pdf_path:
-                        abs_path = settings.pdf_base_path / report.pdf_path
-                        if abs_path.exists():
-                            markdown_text, converter_name = await convert_pdf_to_markdown(abs_path)
-                            if markdown_text:
-                                await save_markdown(session, report.id, markdown_text, converter_name)
-
-                    # 4) Layer 2 추출
-                    layer2 = await extract_layer2(
-                        text=parsed.raw_text,
-                        markdown=markdown_text,
-                        channel=channel_username,
-                        report_id=report.id,
-                    )
-
-                    if layer2:
-                        from db.models import Report as ReportModel
-                        meta_updates = _apply_layer2_meta(report, layer2.meta)
-                        if meta_updates:
-                            await session.execute(
-                                sa_update(ReportModel)
-                                .where(ReportModel.id == report.id)
-                                .values(**meta_updates)
-                            )
-                        try:
-                            await save_analysis(session, report.id, layer2)
-                        except Exception as e:
-                            log.warning("analysis_save_failed", report_id=report.id, error=str(e))
-                            await session.rollback()
-                            async with AsyncSessionLocal() as err_session:
-                                await log_analysis_failure(err_session, report.id, "extract_layer2", str(e))
-                                await err_session.commit()
-                            continue
-
-                    await session.commit()
+                        await session.commit()
 
             last_id = message.id
 

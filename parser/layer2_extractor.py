@@ -26,7 +26,7 @@ def _get_client() -> AsyncAnthropic:
     if _client is None:
         _client = AsyncAnthropic(
             api_key=settings.anthropic_api_key,
-            timeout=60,
+            timeout=300,
         )
     return _client
 
@@ -278,7 +278,7 @@ async def _call_extract(user_content: str):
     client = _get_client()
     response = await client.messages.create(
         model=settings.llm_pdf_model,  # Sonnet
-        max_tokens=4096,
+        max_tokens=8192,
         system=_SYSTEM_PROMPT,
         tools=[_EXTRACT_TOOL],
         tool_choice={"type": "tool", "name": "extract_layer2"},

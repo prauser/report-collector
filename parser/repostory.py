@@ -51,11 +51,32 @@ def _clean_broker(raw: str) -> str:
     return normalize_broker(raw.strip())
 
 
+_DIGEST_SPLIT_RE = re.compile(r'\n+(?=\*?\*?\s*[▶►])')
+
+
 class RepostoryParser(BaseParser):
     CHANNEL = "@repostory123"
 
     def can_parse(self, channel: str) -> bool:
         return channel.lower() == self.CHANNEL.lower()
+
+    def parse_multiple(self, message_text: str, channel: str, message_id: int | None = None) -> list[ParsedReport]:
+        """다이제스트 메시지를 ▶ 블록 단위로 분리해 개별 ParsedReport 목록 반환."""
+        arrow_count = len(re.findall(r'[▶►]', message_text))
+        if arrow_count <= 1:
+            result = self.parse(message_text, channel, message_id)
+            return [result] if result else []
+
+        blocks = _DIGEST_SPLIT_RE.split(message_text)
+        results = []
+        for block in blocks:
+            if not re.search(r'[▶►]', block):
+                continue  # 헤더 줄 스킵
+            parsed = self.parse(block.strip(), channel, message_id)
+            if parsed:
+                parsed.raw_text = block.strip()
+                results.append(parsed)
+        return results
 
     def parse(self, message_text: str, channel: str, message_id: int | None = None) -> ParsedReport | None:
         text = message_text.strip()
