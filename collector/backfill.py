@@ -24,7 +24,7 @@ from storage.pdf_archiver import download_telegram_document, download_pdf
 from storage.report_repo import update_pdf_info, mark_pdf_failed, upsert_report
 from storage.analysis_repo import save_markdown, save_analysis, log_analysis_failure
 from collector.listener import _apply_layer2_meta
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import select, update as sa_update, func
 
 log = structlog.get_logger(__name__)
 
@@ -173,13 +173,18 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
 
                         if layer2:
                             from db.models import Report as ReportModel
+                            from sqlalchemy.exc import IntegrityError
                             meta_updates = _apply_layer2_meta(report, layer2.meta)
                             if meta_updates:
-                                await session.execute(
-                                    sa_update(ReportModel)
-                                    .where(ReportModel.id == report.id)
-                                    .values(**meta_updates)
-                                )
+                                try:
+                                    async with session.begin_nested():
+                                        await session.execute(
+                                            sa_update(ReportModel)
+                                            .where(ReportModel.id == report.id)
+                                            .values(**meta_updates)
+                                        )
+                                except IntegrityError:
+                                    log.debug("meta_update_skipped_dedup", report_id=report.id)
                             try:
                                 await save_analysis(session, report.id, layer2)
                             except Exception as e:
@@ -241,6 +246,31 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
             run_row.n_skipped = n_skipped
             run_row.to_message_id = last_id or None
             await session.commit()
+
+    # PDF 실패율 체크 — 50% 이상이면 경고
+    _PDF_FAILURE_THRESHOLD = 0.5
+    async with AsyncSessionLocal() as session:
+        from db.models import Report as _Report
+        total_with_url = await session.scalar(
+            select(func.count()).where(
+                _Report.source_channel == channel_username,
+                _Report.pdf_url.isnot(None),
+            )
+        )
+        total_failed = await session.scalar(
+            select(func.count()).where(
+                _Report.source_channel == channel_username,
+                _Report.pdf_download_failed.is_(True),
+            )
+        )
+        if total_with_url and total_failed / total_with_url >= _PDF_FAILURE_THRESHOLD:
+            log.warning(
+                "pdf_failure_rate_high",
+                channel=channel_username,
+                failed=total_failed,
+                total_with_url=total_with_url,
+                rate=f"{total_failed / total_with_url:.0%}",
+            )
 
     log.info("backfill_done", channel=channel_username, run_id=run_id,
              saved=n_saved, pending=n_pending, skipped=n_skipped)

@@ -62,6 +62,16 @@ async def download_pdf(report: Report) -> tuple[str | None, int | None]:
                 resp.raise_for_status()
                 content = await resp.read()
 
+        # PDF magic bytes 검증 (%PDF로 시작해야 함)
+        if not content.startswith(b"%PDF"):
+            log.warning(
+                "pdf_invalid_content",
+                url=report.pdf_url,
+                content_type=resp.headers.get("Content-Type", ""),
+                size=len(content),
+            )
+            return None, None
+
         async with aiofiles.open(abs_path, "wb") as f:
             await f.write(content)
 
