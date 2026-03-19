@@ -13,15 +13,22 @@ from telethon.tl.types import Message, MessageMediaDocument, DocumentAttributeFi
 from collector.telegram_client import get_client
 from config.settings import settings
 from db.session import AsyncSessionLocal
-from db.models import BackfillRun, Channel
+from db.models import BackfillRun, Channel, Report as ReportModel, ReportAnalysis
 from parser.registry import parse_messages
 from storage import stock_mapper
 from parser.llm_parser import classify_message
 from parser.quality import assess_parse_quality
 from parser.markdown_converter import convert_pdf_to_markdown
-from parser.layer2_extractor import extract_layer2
+from parser.image_extractor import extract_images_from_pdf
+from parser.chart_digitizer import digitize_charts
+from parser.key_data_extractor import extract_key_data
+from parser.layer2_extractor import (
+    build_user_content, build_batch_request, run_layer2_batch, make_layer2_result,
+)
+from storage.llm_usage_repo import record_llm_usage
 from storage.pending_repo import save_pending
-from storage.pdf_archiver import download_telegram_document, download_pdf
+from storage.pdf_archiver import download_telegram_document, download_pdf, resolve_tme_links
+from sqlalchemy.exc import IntegrityError
 from storage.report_repo import update_pdf_info, mark_pdf_failed, upsert_report
 from storage.analysis_repo import save_markdown, save_analysis, log_analysis_failure
 from collector.listener import _apply_layer2_meta
@@ -55,9 +62,20 @@ class _ReportTask:
 
 
 @dataclass
+class _Layer2Input:
+    """Batch Layer2 처리용 입력 데이터."""
+    report_id: int
+    user_content: str
+    channel: str
+    md_was_truncated: bool
+    md_original_chars: int
+
+
+@dataclass
 class _ReportResult:
     action: str  # 'saved' | 'pending' | 'skipped' | 'error'
     message_id: int
+    layer2_input: _Layer2Input | None = None
 
 
 async def _process_single_report(task: _ReportTask, semaphore: asyncio.Semaphore) -> _ReportResult:
@@ -110,16 +128,31 @@ async def _process_single_report(task: _ReportTask, semaphore: asyncio.Semaphore
                 if rel_path:
                     await update_pdf_info(session, report.id, rel_path, size_kb, None)
                     report.pdf_path = rel_path
-            elif report.pdf_url and not report.pdf_path:
-                rel_path, size_kb = await download_pdf(report)
+
+            # t.me 메시지 링크에서 PDF URL/document resolve
+            if not report.pdf_url and not report.pdf_path and parsed.tme_message_links:
+                tme_url, tme_msg = await resolve_tme_links(client, parsed.tme_message_links)
+                if tme_url:
+                    report.pdf_url = tme_url
+                    await session.execute(
+                        sa_update(ReportModel).where(ReportModel.id == report.id)
+                        .values(pdf_url=tme_url)
+                    )
+                elif tme_msg:
+                    rel_path, size_kb = await download_telegram_document(client, tme_msg, report)
+                    if rel_path:
+                        await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                        report.pdf_path = rel_path
+
+            if report.pdf_url and not report.pdf_path:
+                rel_path, size_kb, fail_reason = await download_pdf(report)
                 if rel_path:
                     await update_pdf_info(session, report.id, rel_path, size_kb, None)
                     report.pdf_path = rel_path
                 else:
-                    await mark_pdf_failed(session, report.id)
+                    await mark_pdf_failed(session, report.id, fail_reason or "unknown")
 
             # 이미 분석된 리포트는 Layer2 skip
-            from db.models import ReportAnalysis
             already_analyzed = await session.scalar(
                 select(ReportAnalysis.id).where(ReportAnalysis.report_id == report.id)
             )
@@ -127,50 +160,73 @@ async def _process_single_report(task: _ReportTask, semaphore: asyncio.Semaphore
                 await session.commit()
                 return _ReportResult(action, message.id)
 
-            # 3) Markdown 변환
+            # 3) 키 데이터 추출 + Markdown 변환 + 이미지 추출
             markdown_text = None
+            chart_texts: list[str] | None = None
             if report.pdf_path:
                 abs_path = settings.pdf_base_path / report.pdf_path
                 if abs_path.exists():
+                    # ③ 키 데이터 추출 (첫 페이지만, Flash-Lite)
+                    key_data = await extract_key_data(
+                        abs_path, report_id=report.id, channel=channel_username,
+                    )
+                    if key_data:
+                        key_meta = {
+                            k: v for k, v in {
+                                "broker": key_data.broker,
+                                "analyst": key_data.analyst,
+                                "stock_name": key_data.stock_name,
+                                "stock_code": key_data.stock_code,
+                                "opinion": key_data.opinion,
+                                "target_price": key_data.target_price,
+                                "report_type": key_data.report_type,
+                            }.items() if v
+                        }
+                        if key_meta:
+                            try:
+                                async with session.begin_nested():
+                                    await session.execute(
+                                        sa_update(ReportModel)
+                                        .where(ReportModel.id == report.id)
+                                        .values(**key_meta)
+                                    )
+                            except Exception:
+                                log.debug("key_meta_update_skipped", report_id=report.id)
+
                     markdown_text, converter_name = await convert_pdf_to_markdown(abs_path)
                     if markdown_text:
                         await save_markdown(session, report.id, markdown_text, converter_name)
 
-            # 4) Layer 2 추출
-            layer2 = await extract_layer2(
-                text=parsed.raw_text,
-                markdown=markdown_text,
-                channel=channel_username,
-                report_id=report.id,
-            )
+                    # ② 차트/테이블 이미지 분리 → ④ Gemini 수치화
+                    images = await extract_images_from_pdf(abs_path)
+                    if images:
+                        dig_result = await digitize_charts(
+                            images, report_id=report.id, channel=channel_username,
+                        )
+                        if dig_result.texts:
+                            chart_texts = dig_result.texts
 
-            if layer2:
-                from db.models import Report as ReportModel
-                from sqlalchemy.exc import IntegrityError
-                meta_updates = _apply_layer2_meta(report, layer2.meta)
-                if meta_updates:
-                    try:
-                        async with session.begin_nested():
-                            await session.execute(
-                                sa_update(ReportModel)
-                                .where(ReportModel.id == report.id)
-                                .values(**meta_updates)
-                            )
-                    except IntegrityError:
-                        log.debug("meta_update_skipped_dedup", report_id=report.id)
-                try:
-                    await save_analysis(session, report.id, layer2)
-                except Exception as e:
-                    log.warning("analysis_save_failed", report_id=report.id, error=str(e))
-                    await session.rollback()
-                    async with AsyncSessionLocal() as err_session:
-                        await log_analysis_failure(err_session, report.id, "extract_layer2", str(e))
-                        await err_session.commit()
-                    return _ReportResult("error", message.id)
+            # 4) Layer2 입력 준비 (실제 호출은 Batch API로 일괄 처리)
+            #    markdown 없으면 스킵 (PDF 다운로드 실패 시 텍스트만으론 품질 부족)
+            layer2_input = None
+            if markdown_text and settings.analysis_enabled and settings.anthropic_api_key:
+                user_content, md_truncated, md_chars = build_user_content(
+                    text=parsed.raw_text,
+                    markdown=markdown_text,
+                    chart_texts=chart_texts,
+                    channel=channel_username,
+                )
+                layer2_input = _Layer2Input(
+                    report_id=report.id,
+                    user_content=user_content,
+                    channel=channel_username,
+                    md_was_truncated=md_truncated,
+                    md_original_chars=md_chars,
+                )
 
             await session.commit()
 
-        return _ReportResult(action, message.id)
+        return _ReportResult(action, message.id, layer2_input=layer2_input)
 
 
 async def backfill_channel(channel_username: str, limit: int | None = None) -> int:
@@ -246,13 +302,15 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
         log.info("backfill_phase1_done", channel=channel_username,
                  messages=n_scanned, tasks=len(tasks))
 
-        # Phase 2: 병렬 처리 (느린 S2a + Layer2)
+        # Phase 2: 병렬 처리 (S2a → DB → PDF → Markdown → Charts)
         semaphore = asyncio.Semaphore(_BACKFILL_CONCURRENCY)
         results = await asyncio.gather(
             *[_process_single_report(t, semaphore) for t in tasks],
             return_exceptions=True,
         )
 
+        # 결과 집계 + Layer2 입력 수집
+        layer2_inputs: dict[str, _Layer2Input] = {}
         for r in results:
             if isinstance(r, Exception):
                 log.warning("backfill_task_error", error=str(r))
@@ -263,6 +321,71 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
                 n_pending += 1
             elif r.action in ("skipped", "error"):
                 n_skipped += 1
+            if r.layer2_input:
+                cid = f"report-{r.layer2_input.report_id}"
+                layer2_inputs[cid] = r.layer2_input
+
+        # Phase 3: Batch API로 Layer2 일괄 추출 (50% 할인 + Prompt Caching)
+        if layer2_inputs:
+            log.info("layer2_batch_start", count=len(layer2_inputs))
+            batch_requests = [
+                build_batch_request(cid, inp.user_content)
+                for cid, inp in layer2_inputs.items()
+            ]
+            batch_results = await run_layer2_batch(batch_requests)
+
+            # Phase 4: Batch 결과 저장
+            for cid, (tool_input, in_tok, out_tok, cc_tok, cr_tok) in batch_results.items():
+                inp = layer2_inputs[cid]
+                layer2 = make_layer2_result(
+                    tool_input, in_tok, out_tok, cc_tok, cr_tok,
+                    inp.md_was_truncated, inp.md_original_chars,
+                    is_batch=True,
+                )
+                if not layer2:
+                    log.warning("layer2_batch_no_result", report_id=inp.report_id)
+                    continue
+
+                await record_llm_usage(
+                    model=settings.llm_pdf_model,
+                    purpose="layer2_batch",
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                    cache_creation_tokens=cc_tok,
+                    cache_read_tokens=cr_tok,
+                    is_batch=True,
+                    source_channel=inp.channel,
+                    report_id=inp.report_id,
+                )
+
+                async with AsyncSessionLocal() as session:
+                    report = await session.get(ReportModel, inp.report_id)
+                    if not report:
+                        continue
+                    meta_updates = _apply_layer2_meta(report, layer2.meta)
+                    if meta_updates:
+                        try:
+                            async with session.begin_nested():
+                                await session.execute(
+                                    sa_update(ReportModel)
+                                    .where(ReportModel.id == inp.report_id)
+                                    .values(**meta_updates)
+                                )
+                        except IntegrityError:
+                            log.debug("meta_update_skipped_dedup", report_id=inp.report_id)
+                    try:
+                        await save_analysis(session, inp.report_id, layer2)
+                    except Exception as e:
+                        log.warning("analysis_save_failed", report_id=inp.report_id, error=str(e))
+                        await session.rollback()
+                        async with AsyncSessionLocal() as err_session:
+                            await log_analysis_failure(err_session, inp.report_id, "layer2_batch", str(e))
+                            await err_session.commit()
+                        continue
+                    await session.commit()
+
+            log.info("layer2_batch_done",
+                     submitted=len(layer2_inputs), succeeded=len(batch_results))
 
         last_id = max(all_message_ids) if all_message_ids else 0
 

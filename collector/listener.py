@@ -17,10 +17,13 @@ from parser.registry import parse_messages
 from parser.llm_parser import classify_message
 from parser.quality import assess_parse_quality
 from parser.markdown_converter import convert_pdf_to_markdown
+from parser.image_extractor import extract_images_from_pdf
+from parser.chart_digitizer import digitize_charts
+from parser.key_data_extractor import extract_key_data
 from parser.layer2_extractor import extract_layer2
 from parser.normalizer import normalize_broker, normalize_opinion, parse_price
 from storage import stock_mapper
-from storage.pdf_archiver import download_pdf, download_telegram_document
+from storage.pdf_archiver import download_pdf, download_telegram_document, resolve_tme_links
 from storage.pending_repo import save_pending
 from storage.report_repo import mark_pdf_failed, update_pdf_info, upsert_report
 from storage.analysis_repo import save_markdown, save_analysis, log_analysis_failure
@@ -175,31 +178,87 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
                     await update_pdf_info(session, report.id, rel_path, size_kb, None)
                     report.pdf_path = rel_path
 
+            # t.me 메시지 링크에서 PDF URL/document resolve
+            if not report.pdf_url and not report.pdf_path and parsed.tme_message_links:
+                tme_url, tme_msg = await resolve_tme_links(client, parsed.tme_message_links)
+                if tme_url:
+                    report.pdf_url = tme_url
+                    from sqlalchemy import update as sa_update
+                    from db.models import Report as ReportModel
+                    await session.execute(
+                        sa_update(ReportModel).where(ReportModel.id == report.id)
+                        .values(pdf_url=tme_url)
+                    )
+                elif tme_msg:
+                    rel_path, size_kb = await download_telegram_document(client, tme_msg, report)
+                    if rel_path:
+                        await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                        report.pdf_path = rel_path
+
             if report.pdf_url and not report.pdf_path:
-                rel_path, size_kb = await download_pdf(report)
+                rel_path, size_kb, fail_reason = await download_pdf(report)
                 if rel_path:
                     await update_pdf_info(session, report.id, rel_path, size_kb, None)
                     report.pdf_path = rel_path
                 else:
-                    await mark_pdf_failed(session, report.id)
+                    await mark_pdf_failed(session, report.id, fail_reason or "unknown")
 
-            # 3) Markdown 변환
+            # 3) 키 데이터 추출 + Markdown 변환 + 이미지 추출
             markdown_text = None
             converter_name = ""
+            chart_texts: list[str] | None = None
             if report.pdf_path:
                 abs_path = settings.pdf_base_path / report.pdf_path
                 if abs_path.exists():
+                    # ③ 키 데이터 추출 (첫 페이지만, Flash-Lite)
+                    key_data = await extract_key_data(
+                        abs_path, report_id=report.id, channel=channel,
+                    )
+                    if key_data:
+                        key_meta = {
+                            k: v for k, v in {
+                                "broker": key_data.broker,
+                                "analyst": key_data.analyst,
+                                "stock_name": key_data.stock_name,
+                                "stock_code": key_data.stock_code,
+                                "opinion": key_data.opinion,
+                                "target_price": key_data.target_price,
+                                "report_type": key_data.report_type,
+                            }.items() if v
+                        }
+                        if key_meta:
+                            from sqlalchemy import update as sa_update
+                            from db.models import Report as ReportModel
+                            await session.execute(
+                                sa_update(ReportModel)
+                                .where(ReportModel.id == report.id)
+                                .values(**key_meta)
+                            )
+
                     markdown_text, converter_name = await convert_pdf_to_markdown(abs_path)
                     if markdown_text:
                         await save_markdown(session, report.id, markdown_text, converter_name)
 
-            # 4) Layer 2 추출 (Sonnet — 메타데이터 + 분석 통합)
-            layer2 = await extract_layer2(
-                text=parsed.raw_text,
-                markdown=markdown_text,
-                channel=channel,
-                report_id=report.id,
-            )
+                    # ② 차트/테이블 이미지 분리 → ④ Gemini 수치화
+                    images = await extract_images_from_pdf(abs_path)
+                    if images:
+                        dig_result = await digitize_charts(
+                            images, report_id=report.id, channel=channel,
+                        )
+                        if dig_result.texts:
+                            chart_texts = dig_result.texts
+
+            # 4) Layer 2 추출 (Sonnet — Prompt Caching 적용)
+            #    markdown 없으면 스킵 (PDF 다운로드 실패 시 텍스트만으론 품질 부족)
+            layer2 = None
+            if markdown_text:
+                layer2 = await extract_layer2(
+                    text=parsed.raw_text,
+                    markdown=markdown_text,
+                    chart_texts=chart_texts,
+                    channel=channel,
+                    report_id=report.id,
+                )
 
             if layer2:
                 # Layer2 메타로 report 필드 보강
