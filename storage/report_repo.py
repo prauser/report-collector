@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,13 +68,13 @@ async def upsert_report(session: AsyncSession, parsed: ParsedReport) -> tuple[Re
             (stmt.excluded.pdf_url.isnot(None)) |
             (stmt.excluded.opinion.isnot(None))
         ),
-    ).returning(Report)
+    ).returning(Report, literal_column("(xmax = 0)").label("was_inserted"))
 
     result = await session.execute(stmt)
     await session.commit()
-    row = result.scalar_one_or_none()
+    pair = result.one_or_none()
 
-    if row is None:
+    if pair is None:
         # DO NOTHING 케이스 - 기존 레코드 조회
         existing = await session.scalar(
             select(Report).where(Report.title_normalized == parsed.title_normalized)
@@ -82,7 +82,8 @@ async def upsert_report(session: AsyncSession, parsed: ParsedReport) -> tuple[Re
         log.info("report_skipped", title=parsed.title[:50])
         return existing, "skipped"
 
-    action = "inserted" if row.created_at == row.updated_at else "updated"
+    row, was_inserted = pair.tuple()
+    action = "inserted" if was_inserted else "updated"
     log.info("report_upserted", action=action, title=parsed.title[:50], broker=values["broker"])
     return row, action
 
@@ -99,9 +100,12 @@ async def get_reports_needing_pdf(session: AsyncSession, limit: int = 100) -> li
     return result.scalars().all()
 
 
-async def mark_pdf_failed(session: AsyncSession, report_id: int) -> None:
+async def mark_pdf_failed(session: AsyncSession, report_id: int, reason: str = "unknown") -> None:
     await session.execute(
-        update(Report).where(Report.id == report_id).values(pdf_download_failed=True)
+        update(Report).where(Report.id == report_id).values(
+            pdf_download_failed=True,
+            pdf_fail_reason=reason,
+        )
     )
     await session.commit()
 

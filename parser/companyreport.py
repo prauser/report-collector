@@ -16,6 +16,16 @@ PATTERN_BROKER = re.compile(
 PATTERN_TARGET_PRICE = re.compile(r"목표가[:\s]*([0-9,]+)\s*원")
 PATTERN_OPINION = re.compile(r"(매수|중립|매도|비중확대|비중축소|Trading\s*Buy|BUY|HOLD|SELL|Buy|Hold|Sell)")
 PATTERN_URL = re.compile(r"https?://\S+")
+PATTERN_TME_MSG = re.compile(r"https?://(?:t\.me|telegram\.me)/([a-zA-Z_]\w+)/(\d+)")
+
+_SKIP_HOSTS = {"t.me", "telegram.me"}
+
+
+def _is_pdf_url(url: str) -> bool:
+    """t.me 등 비-PDF 호스트 URL 제외."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or "").lower()
+    return host not in _SKIP_HOSTS
 
 
 class CompanyReportParser(BaseParser):
@@ -62,9 +72,14 @@ class CompanyReportParser(BaseParser):
         if m_op:
             result.opinion = normalize_opinion(m_op.group(1))
 
-        # URL
-        m_url = PATTERN_URL.search(text)
-        if m_url:
-            result.pdf_url = m_url.group(0)
+        # URL (t.me 등 비-PDF 호스트 제외)
+        for m_url in PATTERN_URL.finditer(text):
+            if _is_pdf_url(m_url.group(0)):
+                result.pdf_url = m_url.group(0)
+                break
+
+        # t.me 메시지 링크 수집 (pdf_url 없을 때 Telethon으로 resolve)
+        if not result.pdf_url:
+            result.tme_message_links = [m.group(0) for m in PATTERN_TME_MSG.finditer(text)]
 
         return result

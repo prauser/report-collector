@@ -31,6 +31,7 @@ class ParsedReport:
     earnings_surprise: str | None = None
 
     pdf_url: str | None = None
+    tme_message_links: list[str] = field(default_factory=list)
     source_message_id: int | None = None
 
     parse_quality: str | None = None  # good / partial / poor
