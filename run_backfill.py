@@ -29,7 +29,7 @@ from db.session import AsyncSessionLocal
 from db.models import Channel
 from sqlalchemy import select
 
-LIMIT = 200
+LIMIT = 2000
 
 async def retry_failed_downloads():
     """기존 리포트 중 pdf_url 있지만 다운로드 안 된 건 재시도."""

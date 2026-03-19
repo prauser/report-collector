@@ -120,6 +120,8 @@ async def process_single(report: ReportModel) -> dict:
         result["steps"]["markdown"] = f"error: {e}"
 
     # ② 이미지 추출 + ④ 차트 수치화
+    images = []
+    dig_result = None
     chart_texts = None
     try:
         images = await extract_images_from_pdf(abs_path)
@@ -135,6 +137,24 @@ async def process_single(report: ReportModel) -> dict:
         log.warning("image_chart_error", report_id=report.id, error=str(e))
         result["steps"]["images"] = f"error: {e}"
         result["steps"]["charts"] = "skipped"
+
+    # 품질 게이트: 마크다운이 너무 짧으면 skip
+    _MIN_MARKDOWN_CHARS = 200
+    if markdown_text and len(markdown_text.strip()) < _MIN_MARKDOWN_CHARS:
+        log.warning("markdown_too_short", report_id=report.id, chars=len(markdown_text.strip()))
+        result["status"] = "low_quality_markdown"
+        return result
+
+    # 품질 게이트: 차트 수치화 과반 실패 시 warning (Layer2는 진행하되 기록)
+    if images and dig_result:
+        fail_rate = 1 - (dig_result.success_count / len(images)) if len(images) > 0 else 0
+        if fail_rate > 0.5:
+            log.warning("chart_digitize_low_quality",
+                        report_id=report.id,
+                        success=dig_result.success_count,
+                        total=len(images),
+                        fail_rate=f"{fail_rate:.0%}")
+            result["steps"]["chart_quality"] = "low"
 
     # Layer2 입력 준비 (실제 호출은 Batch로 일괄)
     if markdown_text:

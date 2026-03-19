@@ -277,9 +277,6 @@ _EXTRACT_TOOL_CACHED = {**_EXTRACT_TOOL, "cache_control": {"type": "ephemeral"}}
 # 컨텐츠 빌더
 # ──────────────────────────────────────────────
 
-_TOTAL_CHAR_LIMIT = 80_000  # markdown + chart_texts 합산 제한 (~60k tokens)
-
-
 def build_user_content(
     text: str,
     markdown: str | None = None,
@@ -288,34 +285,24 @@ def build_user_content(
 ) -> tuple[str, bool, int]:
     """Layer2 추출용 user content 문자열 생성.
 
-    chart_texts(Gemini 수치화)를 우선 배치하고, 남은 공간에 markdown을 채움.
-    합산 _TOTAL_CHAR_LIMIT 초과 시 markdown을 truncate.
+    markdown 전문 + chart_texts 전문을 그대로 전달 (제한 없음).
 
     Returns: (user_content, md_was_truncated, md_original_chars)
     """
     parts = []
 
     # markdown 먼저 (리포트 초반에 투자의견/요약이 있어 attention 확보)
-    charts_block = ""
-    charts_len = 0
-    if chart_texts:
-        charts_block = "\n\n".join(chart_texts)
-        charts_len = len(charts_block)
-
-    md_was_truncated = False
     md_original_chars = 0
     if markdown:
         md_original_chars = len(markdown)
-        md_budget = _TOTAL_CHAR_LIMIT - charts_len
-        if md_budget > 0:
-            md_was_truncated = md_original_chars > md_budget
-            parts.append(f"[PDF 마크다운 본문]\n{markdown[:md_budget]}")
+        parts.append(f"[PDF 마크다운 본문]\n{markdown}")
 
     # chart_texts 끝에 배치 (정확한 수치 데이터, recency bias 활용)
-    if charts_block:
+    if chart_texts:
+        charts_block = "\n\n".join(chart_texts)
         parts.append(f"\n[차트/테이블 수치화 데이터]\n{charts_block}")
 
-    return "\n".join(parts), md_was_truncated, md_original_chars
+    return "\n".join(parts), False, md_original_chars
 
 
 # ──────────────────────────────────────────────
