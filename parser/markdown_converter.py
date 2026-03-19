@@ -12,6 +12,28 @@ from config.settings import settings
 
 log = structlog.get_logger(__name__)
 
+# Windows numpy int32 → ONNX int64 호환성 패치
+# PyMuPDF 레이아웃/테이블 감지의 ONNX 모델이 int64를 기대하지만
+# Windows에서 numpy 기본 int가 int32라 발생하는 문제 해결
+def _patch_onnx_int32():
+    try:
+        import numpy as np
+        if np.array([1]).dtype != np.int64:
+            import onnxruntime
+            _orig = onnxruntime.InferenceSession.run
+            def _patched(self, output_names, input_feed, run_options=None):
+                fixed = {
+                    k: v.astype(np.int64) if isinstance(v, np.ndarray) and v.dtype == np.int32 else v
+                    for k, v in input_feed.items()
+                }
+                return _orig(self, output_names, fixed, run_options)
+            onnxruntime.InferenceSession.run = _patched
+            log.debug("onnx_int32_patch_applied")
+    except ImportError:
+        pass
+
+_patch_onnx_int32()
+
 
 def _estimate_token_count(text: str) -> int:
     """대략적 토큰 수 추정 (한국어 기준 ~1.5자/토큰)."""

@@ -18,12 +18,7 @@ class Settings(BaseSettings):
     telegram_api_hash: str = ""
     telegram_session_name: str = "report_collector"
     telegram_session_string: str | None = None  # Railway용 StringSession
-    telegram_channels: Annotated[list[str], NoDecode] = [
-        "@repostory123",
-        "@companyreport",
-        "@searfin",
-        "@cb_eq_research",
-    ]
+    telegram_channels: Annotated[list[str], NoDecode] = []
 
     @field_validator("telegram_channels", mode="before")
     @classmethod
@@ -55,6 +50,11 @@ class Settings(BaseSettings):
     llm_pdf_model: str = "claude-sonnet-4-6"
     llm_max_retries: int = 2
     llm_timeout: int = 30
+
+    # Gemini (차트/테이블 수치화)
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_timeout: int = 60
 
     # Layer 2 분석
     analysis_enabled: bool = True

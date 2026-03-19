@@ -16,10 +16,18 @@ async def record_llm_usage(
     source_channel: str | None = None,
     report_id: int | None = None,
     message_type: str | None = None,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    is_batch: bool = False,
 ) -> None:
     """llm_usage 테이블에 API 호출 비용 기록. 실패해도 예외 전파 안 함."""
     try:
-        cost = calc_cost_usd(model, input_tokens, output_tokens)
+        cost = calc_cost_usd(
+            model, input_tokens, output_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_read_tokens=cache_read_tokens,
+            is_batch=is_batch,
+        )
         async with AsyncSessionLocal() as session:
             session.add(LlmUsage(
                 model=model,

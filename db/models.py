@@ -61,6 +61,7 @@ class Report(Base):
     pdf_size_kb: Mapped[int | None] = mapped_column(Integer, nullable=True)
     page_count: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     pdf_download_failed: Mapped[bool] = mapped_column(Boolean, default=False)
+    pdf_fail_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # 파싱 품질 (good / partial / poor)
     parse_quality: Mapped[str | None] = mapped_column(String(10), nullable=True)
@@ -133,13 +134,33 @@ _PRICE: dict[str, dict[str, float]] = {
     "claude-haiku-3-5-20241022": {"input": 0.80, "output": 4.00},
     "claude-sonnet-4-6":         {"input": 3.00, "output": 15.00},
     "claude-opus-4-6":           {"input": 15.00, "output": 75.00},
+    "gemini-2.5-flash":          {"input": 0.15, "output": 0.60},
 }
 
 
-def calc_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Decimal:
-    """모델별 토큰 사용량을 USD 비용으로 계산."""
+def calc_cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    is_batch: bool = False,
+) -> Decimal:
+    """모델별 토큰 사용량을 USD 비용으로 계산.
+
+    cache_creation_tokens: 캐시에 쓴 토큰 (1.25x input 가격)
+    cache_read_tokens: 캐시에서 읽은 토큰 (0.1x input 가격)
+    is_batch: Batch API 사용 시 50% 할인
+    """
     price = _PRICE.get(model, {"input": 1.00, "output": 5.00})
-    cost = (input_tokens * price["input"] + output_tokens * price["output"]) / 1_000_000
+    cost = (
+        input_tokens * price["input"]
+        + cache_creation_tokens * price["input"] * 1.25
+        + cache_read_tokens * price["input"] * 0.1
+        + output_tokens * price["output"]
+    ) / 1_000_000
+    if is_batch:
+        cost *= 0.5
     return Decimal(str(round(cost, 8)))
 
 
