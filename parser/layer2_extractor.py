@@ -2,14 +2,21 @@
 
 S2b(메타추출) + Stage5(PDF분석)를 통합한 단일 추출 모듈.
 Sonnet 1회 호출로 메타데이터 + 투자 논리 체인 + 연관 종목/섹터/키워드를 모두 추출.
+
+지원 모드:
+- 실시간 (listener): Prompt Caching 적용 개별 호출
+- 배치 (backfill): Batch API (50% 할인) + Prompt Caching
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from decimal import Decimal
 
 import structlog
 from anthropic import AsyncAnthropic, RateLimitError, APIConnectionError
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from config.settings import settings
@@ -262,9 +269,57 @@ _EXTRACT_TOOL = {
     },
 }
 
+# Prompt Caching — 툴 스키마에 cache_control 추가하여 시스템프롬프트+툴 prefix 캐싱
+_EXTRACT_TOOL_CACHED = {**_EXTRACT_TOOL, "cache_control": {"type": "ephemeral"}}
+
 
 # ──────────────────────────────────────────────
-# LLM 호출
+# 컨텐츠 빌더
+# ──────────────────────────────────────────────
+
+_TOTAL_CHAR_LIMIT = 80_000  # markdown + chart_texts 합산 제한 (~60k tokens)
+
+
+def build_user_content(
+    text: str,
+    markdown: str | None = None,
+    chart_texts: list[str] | None = None,
+    channel: str = "",
+) -> tuple[str, bool, int]:
+    """Layer2 추출용 user content 문자열 생성.
+
+    chart_texts(Gemini 수치화)를 우선 배치하고, 남은 공간에 markdown을 채움.
+    합산 _TOTAL_CHAR_LIMIT 초과 시 markdown을 truncate.
+
+    Returns: (user_content, md_was_truncated, md_original_chars)
+    """
+    parts = []
+
+    # markdown 먼저 (리포트 초반에 투자의견/요약이 있어 attention 확보)
+    charts_block = ""
+    charts_len = 0
+    if chart_texts:
+        charts_block = "\n\n".join(chart_texts)
+        charts_len = len(charts_block)
+
+    md_was_truncated = False
+    md_original_chars = 0
+    if markdown:
+        md_original_chars = len(markdown)
+        md_budget = _TOTAL_CHAR_LIMIT - charts_len
+        if md_budget > 0:
+            md_was_truncated = md_original_chars > md_budget
+            parts.append(f"[PDF 마크다운 본문]\n{markdown[:md_budget]}")
+
+    # chart_texts 끝에 배치 (정확한 수치 데이터, recency bias 활용)
+    if charts_block:
+        parts.append(f"\n[차트/테이블 수치화 데이터]\n{charts_block}")
+
+    return "\n".join(parts), md_was_truncated, md_original_chars
+
+
+# ──────────────────────────────────────────────
+# LLM 호출 (실시간 — Prompt Caching)
 # ──────────────────────────────────────────────
 
 @retry(
@@ -274,13 +329,13 @@ _EXTRACT_TOOL = {
     reraise=True,
 )
 async def _call_extract(user_content: str):
-    """Layer2 추출 LLM 호출."""
+    """Layer2 추출 LLM 호출 (Prompt Caching 적용)."""
     client = _get_client()
     response = await client.messages.create(
-        model=settings.llm_pdf_model,  # Sonnet
+        model=settings.llm_pdf_model,
         max_tokens=8192,
         system=_SYSTEM_PROMPT,
-        tools=[_EXTRACT_TOOL],
+        tools=[_EXTRACT_TOOL_CACHED],
         tool_choice={"type": "tool", "name": "extract_layer2"},
         messages=[{"role": "user", "content": user_content}],
     )
@@ -291,52 +346,173 @@ async def _call_extract(user_content: str):
 
 
 # ──────────────────────────────────────────────
-# 공개 인터페이스
+# Batch API (백필용 — 50% 할인 + Prompt Caching)
+# ──────────────────────────────────────────────
+
+_BATCH_POLL_INTERVAL = 30  # seconds
+
+
+def build_batch_request(custom_id: str, user_content: str) -> Request:
+    """Batch API용 개별 요청 생성."""
+    return Request(
+        custom_id=custom_id,
+        params=MessageCreateParamsNonStreaming(
+            model=settings.llm_pdf_model,
+            max_tokens=8192,
+            system=_SYSTEM_PROMPT,
+            tools=[_EXTRACT_TOOL_CACHED],
+            tool_choice={"type": "tool", "name": "extract_layer2"},
+            messages=[{"role": "user", "content": user_content}],
+        ),
+    )
+
+
+async def run_layer2_batch(
+    requests: list[Request],
+) -> dict[str, tuple[dict | None, int, int, int, int]]:
+    """Batch API로 Layer2 추출 실행.
+
+    Returns: {custom_id: (tool_input, input_tokens, output_tokens,
+              cache_creation_tokens, cache_read_tokens)}
+    """
+    if not requests:
+        return {}
+
+    client = _get_client()
+    batch = await client.messages.batches.create(requests=requests)
+    log.info("layer2_batch_submitted", batch_id=batch.id, count=len(requests))
+
+    # 폴링
+    while True:
+        batch = await client.messages.batches.retrieve(batch.id)
+        if batch.processing_status == "ended":
+            break
+        log.debug(
+            "layer2_batch_polling",
+            batch_id=batch.id,
+            processing=batch.request_counts.processing,
+        )
+        await asyncio.sleep(_BATCH_POLL_INTERVAL)
+
+    log.info(
+        "layer2_batch_completed",
+        batch_id=batch.id,
+        succeeded=batch.request_counts.succeeded,
+        errored=batch.request_counts.errored,
+        expired=batch.request_counts.expired,
+    )
+
+    # 결과 수집
+    results: dict[str, tuple[dict | None, int, int, int, int]] = {}
+    async for entry in await client.messages.batches.results(batch.id):
+        if entry.result.type == "succeeded":
+            msg = entry.result.message
+            tool_input = None
+            for block in msg.content:
+                if block.type == "tool_use" and block.name == "extract_layer2":
+                    tool_input = block.input
+                    break
+            usage = msg.usage
+            results[entry.custom_id] = (
+                tool_input,
+                usage.input_tokens,
+                usage.output_tokens,
+                getattr(usage, "cache_creation_input_tokens", 0) or 0,
+                getattr(usage, "cache_read_input_tokens", 0) or 0,
+            )
+        else:
+            log.warning(
+                "layer2_batch_entry_failed",
+                custom_id=entry.custom_id,
+                result_type=entry.result.type,
+            )
+
+    return results
+
+
+# ──────────────────────────────────────────────
+# 결과 변환
+# ──────────────────────────────────────────────
+
+def make_layer2_result(
+    tool_input: dict | None,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    md_was_truncated: bool = False,
+    md_original_chars: int = 0,
+    is_batch: bool = False,
+) -> Layer2Result | None:
+    """LLM 응답 데이터를 Layer2Result로 변환."""
+    if tool_input is None:
+        return None
+
+    model = settings.llm_pdf_model
+    cost = calc_cost_usd(
+        model, input_tokens, output_tokens,
+        cache_creation_tokens=cache_creation_tokens,
+        cache_read_tokens=cache_read_tokens,
+        is_batch=is_batch,
+    )
+
+    analysis_data = {}
+    for key in ("target", "opinion", "thesis", "chain", "financials"):
+        if key in tool_input:
+            analysis_data[key] = tool_input[key]
+    if "meta" in tool_input:
+        analysis_data["meta"] = tool_input["meta"]
+
+    quality = tool_input.get("extraction_quality", "medium")
+    if md_was_truncated:
+        quality = "truncated"
+
+    return Layer2Result(
+        report_category=tool_input.get("report_category", "stock"),
+        analysis_data=analysis_data,
+        meta=tool_input.get("meta", {}),
+        stock_mentions=tool_input.get("stock_mentions", []),
+        sector_mentions=tool_input.get("sector_mentions", []),
+        keywords=tool_input.get("keywords", []),
+        extraction_quality=quality,
+        markdown_truncated=md_was_truncated,
+        markdown_original_chars=md_original_chars,
+        llm_model=model,
+        llm_cost_usd=cost,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
+
+
+# ──────────────────────────────────────────────
+# 공개 인터페이스 (실시간용 — listener)
 # ──────────────────────────────────────────────
 
 async def extract_layer2(
     text: str,
     markdown: str | None = None,
+    chart_texts: list[str] | None = None,
     channel: str = "",
     report_id: int | None = None,
 ) -> Layer2Result | None:
     """
-    Layer 2 구조화 추출.
+    Layer 2 구조화 추출 (실시간 — Prompt Caching 적용).
 
-    Args:
-        text: 텔레그램 메시지 원문 (raw_text)
-        markdown: PDF → Markdown 변환 결과 (없으면 텍스트만으로 추출)
-        channel: 소스 채널
-        report_id: 연결할 리포트 ID
-
-    Returns:
-        Layer2Result 또는 None (LLM 비활성/실패 시)
+    배치 모드는 build_user_content + build_batch_request + run_layer2_batch 사용.
     """
     if not settings.analysis_enabled or not settings.anthropic_api_key:
         return None
 
-    # 컨텍스트 구성
-    _MD_LIMIT = 30_000
-    _TEXT_LIMIT_WITH_MD = 500  # markdown 있으면 메시지 원문은 메타용으로만
-    parts = [f"[채널: {channel}]"]
-    text_for_llm = text[:_TEXT_LIMIT_WITH_MD] if markdown else text
-    parts.append(f"\n[텔레그램 메시지]\n{text_for_llm}")
-    md_was_truncated = False
-    md_original_chars = 0
-    if markdown:
-        md_original_chars = len(markdown)
-        md_was_truncated = md_original_chars > _MD_LIMIT
-        md_text = markdown[:_MD_LIMIT]
-        parts.append(f"\n[PDF 마크다운 본문]\n{md_text}")
-        if md_was_truncated:
-            log.warning(
-                "markdown_truncated",
-                report_id=report_id,
-                original_chars=md_original_chars,
-                limit=_MD_LIMIT,
-            )
-
-    user_content = "\n".join(parts)
+    user_content, md_was_truncated, md_original_chars = build_user_content(
+        text, markdown, chart_texts, channel,
+    )
+    if md_was_truncated:
+        log.warning(
+            "markdown_truncated",
+            report_id=report_id,
+            original_chars=md_original_chars,
+            limit=_MD_LIMIT,
+        )
 
     try:
         result, response = await _call_extract(user_content)
@@ -345,57 +521,36 @@ async def extract_layer2(
         return None
 
     usage = response.usage
-    model = settings.llm_pdf_model
-    cost = calc_cost_usd(model, usage.input_tokens, usage.output_tokens)
+    cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
 
     await record_llm_usage(
-        model=model,
+        model=settings.llm_pdf_model,
         purpose="layer2_extract",
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
+        cache_creation_tokens=cache_creation,
+        cache_read_tokens=cache_read,
         source_channel=channel,
         report_id=report_id,
     )
 
-    if result is None:
+    layer2 = make_layer2_result(
+        result, usage.input_tokens, usage.output_tokens,
+        cache_creation, cache_read,
+        md_was_truncated, md_original_chars,
+    )
+
+    if layer2 is None:
         log.warning("layer2_no_result", report_id=report_id)
         return None
-
-    # analysis_data 구성 (stock_mentions/sector_mentions/keywords 제외 — 별도 테이블로)
-    analysis_data = {}
-    for key in ("target", "opinion", "thesis", "chain", "financials"):
-        if key in result:
-            analysis_data[key] = result[key]
-    # meta도 analysis_data에 포함 (검색용)
-    if "meta" in result:
-        analysis_data["meta"] = result["meta"]
-
-    quality = result.get("extraction_quality", "medium")
-    if md_was_truncated:
-        quality = "truncated"
-
-    layer2 = Layer2Result(
-        report_category=result.get("report_category", "stock"),
-        analysis_data=analysis_data,
-        meta=result.get("meta", {}),
-        stock_mentions=result.get("stock_mentions", []),
-        sector_mentions=result.get("sector_mentions", []),
-        keywords=result.get("keywords", []),
-        extraction_quality=quality,
-        markdown_truncated=md_was_truncated,
-        markdown_original_chars=md_original_chars,
-        llm_model=model,
-        llm_cost_usd=cost,
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-    )
 
     log.info(
         "layer2_extracted",
         report_id=report_id,
         category=layer2.report_category,
         quality=layer2.extraction_quality,
-        chain_steps=len(analysis_data.get("chain", [])),
+        chain_steps=len(layer2.analysis_data.get("chain", [])),
         stocks=len(layer2.stock_mentions),
     )
     return layer2
