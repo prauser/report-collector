@@ -46,8 +46,11 @@ class DigitizeResult:
     success_count: int = 0
 
 
+_GEMINI_TIMEOUT = 60  # 초
+
+
 async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]:
-    """단일 이미지를 Gemini로 수치화."""
+    """단일 이미지를 Gemini로 수치화. 타임아웃 적용."""
     from google import genai
 
     async with _SEMAPHORE:
@@ -56,21 +59,24 @@ async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]
 
             b64_data = base64.b64encode(image.image_bytes).decode()
 
-            response = await client.aio.models.generate_content(
-                model=settings.gemini_model,
-                contents=[
-                    {
-                        "parts": [
-                            {"text": _DIGITIZE_PROMPT},
-                            {
-                                "inline_data": {
-                                    "mime_type": "image/png",
-                                    "data": b64_data,
-                                }
-                            },
-                        ]
-                    }
-                ],
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=[
+                        {
+                            "parts": [
+                                {"text": _DIGITIZE_PROMPT},
+                                {
+                                    "inline_data": {
+                                        "mime_type": "image/png",
+                                        "data": b64_data,
+                                    }
+                                },
+                            ]
+                        }
+                    ],
+                ),
+                timeout=_GEMINI_TIMEOUT,
             )
 
             text = response.text or ""
@@ -83,6 +89,14 @@ async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]
 
             return text.strip(), input_tokens, output_tokens
 
+        except asyncio.TimeoutError:
+            log.warning(
+                "digitize_timeout",
+                page=image.page_num,
+                source=image.source,
+                timeout=_GEMINI_TIMEOUT,
+            )
+            return None, 0, 0
         except Exception as e:
             log.warning(
                 "digitize_failed",

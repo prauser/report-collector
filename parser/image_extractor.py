@@ -96,22 +96,12 @@ def _extract_embedded_images(page, page_num: int) -> list[ExtractedImage]:
     return results
 
 
-async def extract_images_from_pdf(pdf_path: Path) -> list[ExtractedImage]:
-    """
-    PDF에서 차트/테이블 이미지를 추출.
+_IMAGE_EXTRACT_TIMEOUT = 30
 
-    두 가지 전략을 결합:
-    1. 텍스트 커버리지가 낮은 페이지 → 전체 페이지 렌더링
-    2. 텍스트 커버리지가 높은 페이지에서도 큰 임베디드 이미지 → 직접 추출
 
-    Returns:
-        ExtractedImage 리스트 (최대 _MAX_IMAGES개)
-    """
-    try:
-        import pymupdf
-    except ImportError:
-        log.error("pymupdf_not_installed")
-        return []
+def _extract_images_sync(pdf_path: Path) -> list[ExtractedImage]:
+    """동기 이미지 추출 (to_thread용)."""
+    import pymupdf
 
     try:
         doc = pymupdf.open(pdf_path)
@@ -131,7 +121,6 @@ async def extract_images_from_pdf(pdf_path: Path) -> list[ExtractedImage]:
             coverage = _text_coverage(page)
 
             if coverage <= _TEXT_COVERAGE_THRESHOLD:
-                # 텍스트가 거의 없는 페이지 → 차트/테이블일 가능성 높음 → 전체 렌더링
                 png_bytes = _render_page_to_png(page)
                 results.append(ExtractedImage(
                     page_num=page_num,
@@ -142,7 +131,6 @@ async def extract_images_from_pdf(pdf_path: Path) -> list[ExtractedImage]:
                 ))
                 rendered_pages.add(page_num)
             else:
-                # 텍스트가 많은 페이지에서도 큰 임베디드 이미지는 추출
                 embedded = _extract_embedded_images(page, page_num)
                 remaining = _MAX_IMAGES - len(results)
                 results.extend(embedded[:remaining])
@@ -157,3 +145,26 @@ async def extract_images_from_pdf(pdf_path: Path) -> list[ExtractedImage]:
         embedded=len([r for r in results if r.source == "embedded"]),
     )
     return results
+
+
+async def extract_images_from_pdf(pdf_path: Path) -> list[ExtractedImage]:
+    """PDF에서 차트/테이블 이미지를 추출. 타임아웃 적용."""
+    import asyncio
+
+    try:
+        import pymupdf  # noqa: F401
+    except ImportError:
+        log.error("pymupdf_not_installed")
+        return []
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_extract_images_sync, pdf_path),
+            timeout=_IMAGE_EXTRACT_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning("image_extract_timeout", path=str(pdf_path), timeout=_IMAGE_EXTRACT_TIMEOUT)
+        return []
+    except Exception as e:
+        log.warning("image_extract_failed", path=str(pdf_path), error=str(e))
+        return []

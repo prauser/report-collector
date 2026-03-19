@@ -303,9 +303,20 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
                  messages=n_scanned, tasks=len(tasks))
 
         # Phase 2: 병렬 처리 (S2a → DB → PDF → Markdown → Charts)
+        _TASK_TIMEOUT = 300  # 건당 최대 5분
         semaphore = asyncio.Semaphore(_BACKFILL_CONCURRENCY)
+
+        async def _with_timeout(t):
+            try:
+                return await asyncio.wait_for(
+                    _process_single_report(t, semaphore), timeout=_TASK_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                log.warning("task_timeout", message_id=t.message.id, timeout=_TASK_TIMEOUT)
+                return _ReportResult("error", t.message.id)
+
         results = await asyncio.gather(
-            *[_process_single_report(t, semaphore) for t in tasks],
+            *[_with_timeout(t) for t in tasks],
             return_exceptions=True,
         )
 

@@ -19,9 +19,9 @@ structlog.configure(
 )
 
 from config.settings import settings
-# Disable all heavy processing - just collect reports + download PDFs
+# Phase 1: 메시지 수집 + PDF 다운로드만 (분석은 별도 실행)
 settings.analysis_enabled = False
-settings.gemini_api_key = None  # Disable chart digitization
+settings.gemini_api_key = None
 
 from collector.backfill import backfill_channel
 from collector.telegram_client import get_client
@@ -81,7 +81,7 @@ async def main():
 
     print(f"\nActive channels: {channels}")
     print(f"Limit per channel: {LIMIT}")
-    print(f"Layer2: DISABLED | Gemini: DISABLED")
+    print(f"Layer2: {'ON' if settings.analysis_enabled else 'OFF'} | Gemini: {'ON' if settings.gemini_api_key else 'OFF'}")
     print("=" * 60)
 
     for ch in channels:
