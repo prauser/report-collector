@@ -171,15 +171,16 @@ async def _process_single_report(task: _ReportTask, semaphore: asyncio.Semaphore
                         abs_path, report_id=report.id, channel=channel_username,
                     )
                     if key_data:
+                        _t = lambda v, n: v[:n] if isinstance(v, str) and len(v) > n else v
                         key_meta = {
                             k: v for k, v in {
-                                "broker": key_data.broker,
-                                "analyst": key_data.analyst,
-                                "stock_name": key_data.stock_name,
+                                "broker": _t(key_data.broker, 50),
+                                "analyst": _t(key_data.analyst, 100),
+                                "stock_name": _t(key_data.stock_name, 100),
                                 "stock_code": key_data.stock_code,
-                                "opinion": key_data.opinion,
+                                "opinion": _t(key_data.opinion, 20),
                                 "target_price": key_data.target_price,
-                                "report_type": key_data.report_type,
+                                "report_type": _t(key_data.report_type, 50),
                             }.items() if v
                         }
                         if key_meta:

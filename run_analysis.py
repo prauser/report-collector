@@ -83,15 +83,18 @@ async def process_single(report: ReportModel) -> dict:
     try:
         key_data = await extract_key_data(abs_path, report_id=report.id, channel=channel)
         if key_data:
+            def _trunc(val, maxlen):
+                return val[:maxlen] if isinstance(val, str) and len(val) > maxlen else val
+
             key_meta = {
                 k: v for k, v in {
-                    "broker": key_data.broker,
-                    "analyst": key_data.analyst,
-                    "stock_name": key_data.stock_name,
+                    "broker": _trunc(key_data.broker, 50),
+                    "analyst": _trunc(key_data.analyst, 100),
+                    "stock_name": _trunc(key_data.stock_name, 100),
                     "stock_code": key_data.stock_code,
-                    "opinion": key_data.opinion,
+                    "opinion": _trunc(key_data.opinion, 20),
                     "target_price": key_data.target_price,
-                    "report_type": key_data.report_type,
+                    "report_type": _trunc(key_data.report_type, 50),
                 }.items() if v
             }
             if key_meta:
