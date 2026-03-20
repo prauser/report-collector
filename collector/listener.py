@@ -68,28 +68,30 @@ def _apply_layer2_meta(report, meta: dict, session_needed: bool = False) -> dict
         return {}
 
     updates = {}
+    _t = lambda v, n: v[:n] if isinstance(v, str) and len(v) > n else v
 
-    def _pick(key, normalizer=None):
+    def _pick(key, normalizer=None, maxlen=None):
         val = meta.get(key)
         if val:
-            return normalizer(val) if normalizer else val
+            val = normalizer(val) if normalizer else val
+            return _t(val, maxlen) if maxlen and isinstance(val, str) else val
         return None
 
-    if v := _pick("broker", normalize_broker):
+    if v := _pick("broker", normalize_broker, 50):
         updates["broker"] = v
-    if v := _pick("stock_name"):
+    if v := _pick("stock_name", maxlen=100):
         updates["stock_name"] = v
     if v := _pick("stock_code"):
         updates["stock_code"] = v
-    if v := _pick("analyst"):
+    if v := _pick("analyst", maxlen=100):
         updates["analyst"] = v
-    if v := _pick("opinion", normalize_opinion):
+    if v := _pick("opinion", normalize_opinion, 20):
         updates["opinion"] = v
-    if v := _pick("sector"):
+    if v := _pick("sector", maxlen=100):
         updates["sector"] = v
-    if v := _pick("report_type"):
+    if v := _pick("report_type", maxlen=50):
         updates["report_type"] = v
-    if v := _pick("prev_opinion", normalize_opinion):
+    if v := _pick("prev_opinion", normalize_opinion, 20):
         updates["prev_opinion"] = v
 
     tp = meta.get("target_price")
