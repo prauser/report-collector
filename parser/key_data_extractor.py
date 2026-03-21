@@ -21,7 +21,7 @@ _EXTRACT_PROMPT = """\
 다음 필드를 JSON으로 추출하세요. 없으면 null.
 
 - broker: 증권사명 (예: "삼성증권", "NH투자증권"). 최대 50자.
-- analyst: 기업분석/산업분석이면 대표 애널리스트 1명 이름 (예: "홍길동"). 주간전략/퀀트/매크로면 팀명 (예: "투자전략팀"). 최대 20자.
+- analyst: 기업분석/산업분석이면 대표 애널리스트 1명 이름 (예: "홍길동"). 주간전략/퀀트/매크로면 팀명 (예: "투자전략팀"). 특정 불가하면 "Unknown". 최대 20자.
 - date: 리포트 발행일 (YYYY-MM-DD)
 - stock_name: 주요 종목명 (종목 리포트일 때). 최대 30자.
 - stock_code: 종목코드 6자리
@@ -51,7 +51,7 @@ class KeyDataResult:
 
 
 def _get_first_page_text(pdf_path) -> str | None:
-    """PDF 첫 페이지 텍스트만 추출."""
+    """PDF 첫 2페이지 텍스트 추출. 첫 페이지가 비어있으면 2페이지도 포함."""
     try:
         import pymupdf
         doc = pymupdf.open(pdf_path)
@@ -59,6 +59,8 @@ def _get_first_page_text(pdf_path) -> str | None:
             doc.close()
             return None
         text = doc[0].get_text()
+        if not text.strip() and len(doc) > 1:
+            text = doc[1].get_text()
         doc.close()
         return text if text.strip() else None
     except Exception as e:
