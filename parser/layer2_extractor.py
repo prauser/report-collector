@@ -113,7 +113,7 @@ _EXTRACT_TOOL = {
                 "description": "리포트 메타데이터",
                 "properties": {
                     "broker": {"type": "string", "description": "증권사명 (예: 삼성증권). 최대 50자"},
-                    "analyst": {"type": "string", "description": "대표 애널리스트 1명 이름만 (예: 홍길동). 최대 20자"},
+                    "analyst": {"type": "string", "description": "기업/산업분석이면 대표 애널리스트 1명 (예: 홍길동). 주간전략/퀀트/매크로면 팀명 (예: 투자전략팀). 최대 20자"},
                     "title": {"type": "string", "description": "리포트 제목"},
                     "report_type": {"type": "string", "enum": ["기업분석", "산업분석", "매크로", "실적리뷰", "퀀트", "주간전략", "기타"], "description": "리포트 유형"},
                     "stock_name": {"type": "string", "description": "주요 종목명. 최대 30자"},
