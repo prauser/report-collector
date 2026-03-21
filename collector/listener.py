@@ -205,88 +205,9 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
                 else:
                     await mark_pdf_failed(session, report.id, fail_reason or "unknown")
 
-            # 3) 키 데이터 추출 + Markdown 변환 + 이미지 추출
-            markdown_text = None
-            converter_name = ""
-            chart_texts: list[str] | None = None
-            if report.pdf_path:
-                abs_path = settings.pdf_base_path / report.pdf_path
-                if abs_path.exists():
-                    # ③ 키 데이터 추출 (첫 페이지만, Flash-Lite)
-                    key_data = await extract_key_data(
-                        abs_path, report_id=report.id, channel=channel,
-                    )
-                    if key_data:
-                        _t = lambda v, n: v[:n] if isinstance(v, str) and len(v) > n else v
-                        key_meta = {
-                            k: v for k, v in {
-                                "broker": _t(key_data.broker, 50),
-                                "analyst": _t(key_data.analyst, 100),
-                                "stock_name": _t(key_data.stock_name, 100),
-                                "stock_code": key_data.stock_code,
-                                "opinion": _t(key_data.opinion, 20),
-                                "target_price": key_data.target_price,
-                                "report_type": _t(key_data.report_type, 50),
-                            }.items() if v
-                        }
-                        if key_meta:
-                            from sqlalchemy import update as sa_update
-                            from db.models import Report as ReportModel
-                            await session.execute(
-                                sa_update(ReportModel)
-                                .where(ReportModel.id == report.id)
-                                .values(**key_meta)
-                            )
-
-                    markdown_text, converter_name = await convert_pdf_to_markdown(abs_path)
-                    if markdown_text:
-                        await save_markdown(session, report.id, markdown_text, converter_name)
-
-                    # ② 차트/테이블 이미지 분리 → ④ Gemini 수치화
-                    images = await extract_images_from_pdf(abs_path)
-                    if images:
-                        dig_result = await digitize_charts(
-                            images, report_id=report.id, channel=channel,
-                        )
-                        if dig_result.texts:
-                            chart_texts = dig_result.texts
-
-            # 4) Layer 2 추출 (Sonnet — Prompt Caching 적용)
-            #    markdown 없으면 스킵 (PDF 다운로드 실패 시 텍스트만으론 품질 부족)
-            layer2 = None
-            if markdown_text:
-                layer2 = await extract_layer2(
-                    text=parsed.raw_text,
-                    markdown=markdown_text,
-                    chart_texts=chart_texts,
-                    channel=channel,
-                    report_id=report.id,
-                )
-
-            if layer2:
-                # Layer2 메타로 report 필드 보강
-                from sqlalchemy import update as sa_update
-                from db.models import Report as ReportModel
-                meta_updates = _apply_layer2_meta(report, layer2.meta)
-                if meta_updates:
-                    await session.execute(
-                        sa_update(ReportModel)
-                        .where(ReportModel.id == report.id)
-                        .values(**meta_updates)
-                    )
-
-                # 분석 결과 저장
-                try:
-                    await save_analysis(session, report.id, layer2)
-                    await session.commit()
-                except Exception as e:
-                    log.warning("analysis_save_failed", report_id=report.id, error=str(e))
-                    await session.rollback()
-                    async with AsyncSessionLocal() as err_session:
-                        await log_analysis_failure(err_session, report.id, "extract_layer2", str(e))
-                        await err_session.commit()
-            else:
-                await session.commit()
+            # 분석(키데이터/마크다운/이미지/Gemini/Layer2)은 run_analysis.py에서 배치 처리
+            await session.commit()
+            log.info("report_collected", report_id=report.id, has_pdf=bool(report.pdf_path))
 
 
 async def start_listener() -> None:
