@@ -19,6 +19,7 @@ from db.models import Trade
 from trades.csv_parsers.common import TradeRow
 from trades.trade_repo import (
     TradeFilters,
+    count_trades,
     get_chart_data,
     get_trade,
     get_trade_stats,
@@ -272,6 +273,94 @@ class TestGetTrades:
         sql = str(stmt.compile(dialect=postgresql.dialect()))
         assert "DESC" in sql.upper()
         assert "traded_at" in sql
+
+
+# ---------------------------------------------------------------------------
+# count_trades
+# ---------------------------------------------------------------------------
+
+class TestCountTrades:
+    @pytest.mark.asyncio
+    async def test_no_filters_returns_total_count(self):
+        """No filters — returns the scalar value from COUNT(id)."""
+        session = _mock_session()
+        session.execute.return_value = _mock_execute_result(scalar_value=42)
+
+        result = await count_trades(session)
+        assert result == 42
+        session.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_symbol_filter_in_sql(self):
+        """Symbol filter should appear in the compiled SQL bind params."""
+        captured = {}
+
+        async def capture(stmt, *a, **kw):
+            captured["stmt"] = stmt
+            return _mock_execute_result(scalar_value=5)
+
+        session = _mock_session()
+        session.execute = capture
+
+        result = await count_trades(session, TradeFilters(symbol="005930"))
+        assert result == 5
+
+        from sqlalchemy.dialects import postgresql
+        compiled = captured["stmt"].compile(dialect=postgresql.dialect())
+        params = compiled.params
+        assert any("005930" in str(v) for v in params.values())
+
+    @pytest.mark.asyncio
+    async def test_date_range_filter_in_sql(self):
+        """date_from and date_to should appear in compiled bind params."""
+        captured = {}
+
+        async def capture(stmt, *a, **kw):
+            captured["stmt"] = stmt
+            return _mock_execute_result(scalar_value=3)
+
+        session = _mock_session()
+        session.execute = capture
+
+        date_from = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date_to = datetime(2024, 6, 30, tzinfo=timezone.utc)
+        result = await count_trades(session, TradeFilters(date_from=date_from, date_to=date_to))
+        assert result == 3
+
+        from sqlalchemy.dialects import postgresql
+        compiled = captured["stmt"].compile(dialect=postgresql.dialect())
+        params = compiled.params
+        assert any(v == date_from for v in params.values())
+        assert any(v == date_to for v in params.values())
+
+    @pytest.mark.asyncio
+    async def test_side_filter_in_sql(self):
+        """Side filter should appear in the compiled SQL bind params."""
+        captured = {}
+
+        async def capture(stmt, *a, **kw):
+            captured["stmt"] = stmt
+            return _mock_execute_result(scalar_value=7)
+
+        session = _mock_session()
+        session.execute = capture
+
+        result = await count_trades(session, TradeFilters(side="buy"))
+        assert result == 7
+
+        from sqlalchemy.dialects import postgresql
+        compiled = captured["stmt"].compile(dialect=postgresql.dialect())
+        params = compiled.params
+        assert any(v == "buy" for v in params.values())
+
+    @pytest.mark.asyncio
+    async def test_zero_results_case(self):
+        """When COUNT returns 0 (or None), count_trades should return 0."""
+        session = _mock_session()
+        session.execute.return_value = _mock_execute_result(scalar_value=None)
+
+        result = await count_trades(session)
+        assert result == 0
 
 
 # ---------------------------------------------------------------------------

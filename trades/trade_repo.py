@@ -112,8 +112,32 @@ async def get_trades(session: AsyncSession, filters: TradeFilters | None = None)
 
 
 # ---------------------------------------------------------------------------
-# get_trade (단건, indicator 포함)
+# count_trades
 # ---------------------------------------------------------------------------
+
+async def count_trades(session: AsyncSession, filters: TradeFilters | None = None) -> int:
+    """필터 조건에 맞는 Trade 총 건수 (페이지네이션 제외)."""
+    if filters is None:
+        filters = TradeFilters()
+
+    stmt = select(func.count(Trade.id))
+
+    if filters.symbol:
+        stmt = stmt.where(Trade.symbol == filters.symbol)
+    if filters.date_from:
+        stmt = stmt.where(Trade.traded_at >= filters.date_from)
+    if filters.date_to:
+        stmt = stmt.where(Trade.traded_at <= filters.date_to)
+    if filters.broker:
+        stmt = stmt.where(Trade.broker == filters.broker)
+    if filters.side:
+        stmt = stmt.where(Trade.side == filters.side)
+    if filters.account_type:
+        stmt = stmt.where(Trade.account_type == filters.account_type)
+
+    result = await session.execute(stmt)
+    return result.scalar() or 0
+
 
 async def get_trade(session: AsyncSession, trade_id: int) -> Trade | None:
     """ID로 Trade 단건 조회."""
