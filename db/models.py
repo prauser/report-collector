@@ -14,6 +14,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -343,6 +344,71 @@ class AnalysisJob(Base):
         Index("idx_aj_report_id", "report_id"),
         Index("idx_aj_status", "status"),
         Index("idx_aj_job_type", "job_type"),
+    )
+
+
+class Trade(Base):
+    """매매 체결 내역."""
+    __tablename__ = "trades"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    side: Mapped[str] = mapped_column(String(4), nullable=False)  # 'buy' / 'sell'
+    traded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    broker: Mapped[str] = mapped_column(String(20), nullable=False)
+    account_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    market: Mapped[str] = mapped_column(String(10), nullable=False)
+    fees: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("symbol", "traded_at", "side", "price", "quantity", "broker", name="uq_trade_dedup"),
+        Index("ix_trades_symbol", "symbol"),
+        Index("ix_trades_traded_at", "traded_at"),
+        Index("ix_trades_side", "side"),
+    )
+
+
+class TradeIndicator(Base):
+    """매매 시점 기술적 지표 스냅샷 (trade와 1:1)."""
+    __tablename__ = "trade_indicators"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("trades.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    stoch_k_d: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    rsi_14: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    macd: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    ma_position: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    bb_position: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
+    volume_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    snapshot_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TradePair(Base):
+    """매수-매도 체결을 연결하는 손익 계산 단위."""
+    __tablename__ = "trade_pairs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    buy_trade_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("trades.id", ondelete="CASCADE"), nullable=False
+    )
+    sell_trade_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("trades.id", ondelete="CASCADE"), nullable=False
+    )
+    profit_rate: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    holding_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("ix_trade_pairs_buy_trade_id", "buy_trade_id"),
+        Index("ix_trade_pairs_sell_trade_id", "sell_trade_id"),
     )
 
 
