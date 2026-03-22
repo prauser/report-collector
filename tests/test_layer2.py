@@ -12,7 +12,12 @@ from parser.layer2_extractor import extract_layer2, Layer2Result
 
 def _mock_extract_response(result_dict: dict):
     response = MagicMock()
-    response.usage = MagicMock(input_tokens=1000, output_tokens=500)
+    response.usage = MagicMock(
+        input_tokens=1000,
+        output_tokens=500,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+    )
     return result_dict, response
 
 
@@ -123,8 +128,8 @@ class TestExtractLayer2:
         assert mock_record.call_args.kwargs["purpose"] == "layer2_extract"
 
     @pytest.mark.asyncio
-    async def test_markdown_truncated(self):
-        """긴 마크다운은 30K 자로 잘림."""
+    async def test_long_markdown_not_truncated(self):
+        """긴 마크다운도 잘리지 않고 그대로 전달됨 (제한 없음)."""
         llm_result = {
             "report_category": "stock",
             "meta": {},
@@ -145,18 +150,18 @@ class TestExtractLayer2:
             long_md = "가" * 50_000
             result = await extract_layer2(text="test", markdown=long_md)
 
-        # _call_extract에 전달된 user_content에서 마크다운이 30K로 잘렸는지
+        # user_content에 전체 마크다운이 포함되어야 함 (자르지 않음)
         call_args = mock_call.call_args[0]
-        assert len(call_args[0]) < 50_000 + 500  # 원문 + 채널 헤더 등
+        assert len(call_args[0]) >= 50_000  # 원문 전체 포함
 
-        # truncated 플래그 확인
-        assert result.markdown_truncated is True
+        # truncated 플래그는 항상 False
+        assert result.markdown_truncated is False
         assert result.markdown_original_chars == 50_000
-        assert result.extraction_quality == "truncated"
+        assert result.extraction_quality == "medium"  # LLM이 반환한 값 그대로
 
     @pytest.mark.asyncio
     async def test_short_markdown_not_truncated(self):
-        """30K 이하 마크다운은 truncated가 아님."""
+        """짧은 마크다운도 truncated=False."""
         llm_result = {
             "report_category": "stock",
             "meta": {},

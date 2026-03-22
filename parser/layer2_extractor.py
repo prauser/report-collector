@@ -337,6 +337,7 @@ async def _call_extract(user_content: str):
 # ──────────────────────────────────────────────
 
 _BATCH_POLL_INTERVAL = 30  # seconds
+_MAX_BATCH_SIZE = 10_000  # Anthropic Batch API 최대 건수
 
 
 def build_batch_request(custom_id: str, user_content: str) -> Request:
@@ -354,19 +355,36 @@ def build_batch_request(custom_id: str, user_content: str) -> Request:
     )
 
 
-async def run_layer2_batch(
+async def _submit_and_poll_batch(
     requests: list[Request],
-) -> dict[str, tuple[dict | None, int, int, int, int]]:
-    """Batch API로 Layer2 추출 실행.
+) -> tuple[dict[str, tuple[dict | None, int, int, int, int]], list[str]]:
+    """단일 배치 제출 + 폴링 + 결과 수집.
 
-    Returns: {custom_id: (tool_input, input_tokens, output_tokens,
-              cache_creation_tokens, cache_read_tokens)}
+    Returns: (results_dict, failed_custom_ids)
+    - results_dict: {custom_id: (tool_input, in_tok, out_tok, cc_tok, cr_tok)}
+    - failed_custom_ids: errored/expired 엔트리의 custom_id 목록
     """
-    if not requests:
-        return {}
-
     client = _get_client()
-    batch = await client.messages.batches.create(requests=requests)
+
+    # 제출 retry (3회, 지수 백오프 5~60초)
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            batch = await client.messages.batches.create(requests=requests)
+            break
+        except (RateLimitError, APIConnectionError) as e:
+            last_exc = e
+            wait = min(5 * (2 ** attempt), 60)
+            log.warning(
+                "layer2_batch_submit_retry",
+                attempt=attempt + 1,
+                wait_sec=wait,
+                error=str(e),
+            )
+            await asyncio.sleep(wait)
+    else:
+        raise last_exc  # type: ignore[misc]
+
     log.info("layer2_batch_submitted", batch_id=batch.id, count=len(requests))
 
     # 폴링
@@ -391,6 +409,7 @@ async def run_layer2_batch(
 
     # 결과 수집
     results: dict[str, tuple[dict | None, int, int, int, int]] = {}
+    failed_ids: list[str] = []
     async for entry in await client.messages.batches.results(batch.id):
         if entry.result.type == "succeeded":
             msg = entry.result.message
@@ -413,8 +432,42 @@ async def run_layer2_batch(
                 custom_id=entry.custom_id,
                 result_type=entry.result.type,
             )
+            failed_ids.append(entry.custom_id)
 
-    return results
+    return results, failed_ids
+
+
+async def run_layer2_batch(
+    requests: list[Request],
+) -> tuple[dict[str, tuple[dict | None, int, int, int, int]], list[str]]:
+    """Batch API로 Layer2 추출 실행. 10,000건 초과 시 자동 청크 분할.
+
+    Returns: (results_dict, failed_custom_ids)
+    - results_dict: {custom_id: (tool_input, input_tokens, output_tokens,
+                     cache_creation_tokens, cache_read_tokens)}
+    - failed_custom_ids: errored/expired 엔트리의 custom_id 목록 (pipeline_status='analysis_failed' 설정용)
+    """
+    if not requests:
+        return {}, []
+
+    all_results: dict[str, tuple[dict | None, int, int, int, int]] = {}
+    all_failed: list[str] = []
+
+    # 10,000건 초과 시 청크 분할
+    for i in range(0, len(requests), _MAX_BATCH_SIZE):
+        chunk = requests[i : i + _MAX_BATCH_SIZE]
+        if len(requests) > _MAX_BATCH_SIZE:
+            log.info(
+                "layer2_batch_chunk",
+                chunk_start=i,
+                chunk_size=len(chunk),
+                total=len(requests),
+            )
+        results, failed = await _submit_and_poll_batch(chunk)
+        all_results.update(results)
+        all_failed.extend(failed)
+
+    return all_results, all_failed
 
 
 # ──────────────────────────────────────────────
@@ -493,13 +546,6 @@ async def extract_layer2(
     user_content, md_was_truncated, md_original_chars = build_user_content(
         text, markdown, chart_texts, channel,
     )
-    if md_was_truncated:
-        log.warning(
-            "markdown_truncated",
-            report_id=report_id,
-            original_chars=md_original_chars,
-            limit=_MD_LIMIT,
-        )
 
     try:
         result, response = await _call_extract(user_content)
