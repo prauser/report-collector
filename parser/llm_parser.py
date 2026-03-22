@@ -41,9 +41,11 @@ _S2A_SYSTEM = """\
 - general: 광고, 채널 안내, 잡담, 이모지 도배 등
 - ambiguous: 리포트일 수도 있지만 판단하기 어려운 경우
 
-broker_report와 ambiguous의 차이:
+분류 기준 (중요):
+- PDF 파일명에 종목명, 날짜, 종목코드 등이 포함되어 있으면 증권사명이 없어도 broker_report
 - PDF 링크 또는 증권사명 + 종목명 조합이 명확하면 broker_report
-- 텍스트가 손상/잘림/외국어로 되어 있거나 PDF만 있고 증권사를 전혀 알 수 없으면 ambiguous
+- 파일명 패턴 예시: "삼성전자_20210629_Hana_719274.pdf", "야스255440_20210621.pdf" → broker_report
+- ambiguous는 텍스트가 심하게 손상되었거나 내용이 너무 짧아 전혀 판단 불가능한 경우에만 사용
 """
 
 _S2A_TOOL = {

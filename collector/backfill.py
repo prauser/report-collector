@@ -94,7 +94,7 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
     if s2a.message_type in ("news", "general"):
         return _ReportResult("skipped", message.id)
 
-    if s2a.message_type == "ambiguous" and not parsed.pdf_url:
+    if s2a.message_type == "ambiguous" and not parsed.pdf_url and not task.pdf_fname:
         async with AsyncSessionLocal() as session:
             await save_pending(
                 session,
