@@ -63,6 +63,8 @@ class Report(Base):
     page_count: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     pdf_download_failed: Mapped[bool] = mapped_column(Boolean, default=False)
     pdf_fail_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    pdf_fail_retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    pipeline_status: Mapped[str] = mapped_column(String(30), default="new", index=True)
 
     # 파싱 품질 (good / partial / poor)
     parse_quality: Mapped[str | None] = mapped_column(String(10), nullable=True)
@@ -409,6 +411,46 @@ class TradePair(Base):
     __table_args__ = (
         Index("ix_trade_pairs_buy_trade_id", "buy_trade_id"),
         Index("ix_trade_pairs_sell_trade_id", "sell_trade_id"),
+    )
+
+
+class ChatSession(Base):
+    """AI Agent 대화 세션."""
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # 사용자 식별자 (향후 인증 연동용, nullable)
+    user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_chat_sessions_user_id", "user_id"),
+        Index("ix_chat_sessions_created_at", "created_at"),
+    )
+
+
+class ChatMessage(Base):
+    """AI Agent 대화 메시지 (세션 내 히스토리)."""
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    # 'user' | 'assistant'
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # 사용된 컨텍스트 리포트 수
+    context_report_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_chat_messages_session_id", "session_id"),
+        Index("ix_chat_messages_created_at", "created_at"),
     )
 
 
