@@ -6,33 +6,20 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db
-from api.schemas import FilterOptions, PaginatedReports, ReportDetail, ReportSummary
-from db.models import Report
+from api.layer2_helpers import _display_title, _layer2_summary_from_analysis, _to_summary
+from api.schemas import (
+    FilterOptions,
+    Layer2Data,
+    Layer2Keyword,
+    Layer2SectorMention,
+    Layer2StockMention,
+    PaginatedReports,
+    ReportDetail,
+    ReportSummary,
+)
+from db.models import Report, ReportAnalysis, ReportKeyword, ReportSectorMention, ReportStockMention
 
 router = APIRouter(prefix="/reports", tags=["reports"])
-
-
-def _to_summary(r: Report) -> ReportSummary:
-    return ReportSummary(
-        id=r.id,
-        broker=r.broker,
-        report_date=r.report_date,
-        analyst=r.analyst,
-        stock_name=r.stock_name,
-        stock_code=r.stock_code,
-        title=r.title,
-        sector=r.sector,
-        report_type=r.report_type,
-        opinion=r.opinion,
-        target_price=r.target_price,
-        prev_opinion=r.prev_opinion,
-        prev_target_price=r.prev_target_price,
-        has_pdf=r.pdf_path is not None,
-        has_ai=r.ai_processed_at is not None,
-        ai_sentiment=r.ai_sentiment,
-        collected_at=r.collected_at,
-        source_channel=r.source_channel,
-    )
 
 
 @router.get("", response_model=PaginatedReports)
@@ -50,55 +37,68 @@ async def list_reports(
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(Report)
+    # Base query on reports only (for filtering/counting)
+    base_stmt = select(Report)
 
     if q:
-        stmt = stmt.where(
+        base_stmt = base_stmt.where(
             or_(
                 Report.title.ilike(f"%{q}%"),
                 Report.stock_name.ilike(f"%{q}%"),
             )
         )
     if stock:
-        stmt = stmt.where(
+        base_stmt = base_stmt.where(
             or_(
                 Report.stock_name.ilike(f"%{stock}%"),
                 Report.stock_code == stock,
             )
         )
     if broker:
-        stmt = stmt.where(Report.broker == broker)
+        base_stmt = base_stmt.where(Report.broker == broker)
     if opinion:
-        stmt = stmt.where(Report.opinion == opinion)
+        base_stmt = base_stmt.where(Report.opinion == opinion)
     if report_type:
-        stmt = stmt.where(Report.report_type == report_type)
+        base_stmt = base_stmt.where(Report.report_type == report_type)
     if channel:
-        stmt = stmt.where(Report.source_channel == channel)
+        base_stmt = base_stmt.where(Report.source_channel == channel)
     if from_date:
-        stmt = stmt.where(Report.report_date >= from_date)
+        base_stmt = base_stmt.where(Report.report_date >= from_date)
     if to_date:
-        stmt = stmt.where(Report.report_date <= to_date)
+        base_stmt = base_stmt.where(Report.report_date <= to_date)
     if has_ai is True:
-        stmt = stmt.where(Report.ai_processed_at.isnot(None))
+        base_stmt = base_stmt.where(Report.ai_processed_at.isnot(None))
     elif has_ai is False:
-        stmt = stmt.where(Report.ai_processed_at.is_(None))
+        base_stmt = base_stmt.where(Report.ai_processed_at.is_(None))
 
     # 전체 count
-    count_stmt = select(func.count()).select_from(stmt.subquery())
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total = await db.scalar(count_stmt)
 
-    # 페이지네이션
-    stmt = stmt.order_by(Report.report_date.desc(), Report.collected_at.desc())
-    stmt = stmt.offset((page - 1) * limit).limit(limit)
-
-    result = await db.execute(stmt)
+    # 페이지네이션 + LEFT JOIN report_analysis (N+1 방지)
+    paged_stmt = (
+        base_stmt
+        .order_by(Report.report_date.desc(), Report.collected_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    result = await db.execute(paged_stmt)
     reports = result.scalars().all()
+
+    # Batch-fetch analysis for these report IDs
+    report_ids = [r.id for r in reports]
+    analysis_map: dict[int, ReportAnalysis] = {}
+    if report_ids:
+        ra_stmt = select(ReportAnalysis).where(ReportAnalysis.report_id.in_(report_ids))
+        ra_result = await db.execute(ra_stmt)
+        for ra in ra_result.scalars().all():
+            analysis_map[ra.report_id] = ra
 
     return PaginatedReports(
         total=total or 0,
         page=page,
         limit=limit,
-        items=[_to_summary(r) for r in reports],
+        items=[_to_summary(r, analysis_map.get(r.id)) for r in reports],
     )
 
 
@@ -134,8 +134,65 @@ async def get_report(report_id: int, db: AsyncSession = Depends(get_db)):
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
+    # Load analysis with related tables
+    ra_result = await db.execute(
+        select(ReportAnalysis).where(ReportAnalysis.report_id == report_id)
+    )
+    ra: ReportAnalysis | None = ra_result.scalar_one_or_none()
+
+    layer2: Layer2Data | None = None
+    if ra is not None:
+        # Load stock mentions
+        sm_result = await db.execute(
+            select(ReportStockMention).where(ReportStockMention.report_id == report_id)
+        )
+        stock_mentions = [
+            Layer2StockMention(
+                stock_code=sm.stock_code,
+                company_name=sm.company_name,
+                mention_type=sm.mention_type,
+                impact=sm.impact,
+                relevance_score=float(sm.relevance_score) if sm.relevance_score is not None else None,
+            )
+            for sm in sm_result.scalars().all()
+        ]
+
+        # Load sector mentions
+        sect_result = await db.execute(
+            select(ReportSectorMention).where(ReportSectorMention.report_id == report_id)
+        )
+        sector_mentions = [
+            Layer2SectorMention(
+                sector=sect.sector,
+                mention_type=sect.mention_type,
+                impact=sect.impact,
+            )
+            for sect in sect_result.scalars().all()
+        ]
+
+        # Load keywords
+        kw_result = await db.execute(
+            select(ReportKeyword).where(ReportKeyword.report_id == report_id)
+        )
+        keywords = [
+            Layer2Keyword(
+                keyword=kw.keyword,
+                keyword_type=kw.keyword_type,
+            )
+            for kw in kw_result.scalars().all()
+        ]
+
+        layer2 = Layer2Data(
+            report_category=ra.report_category,
+            analysis_data=ra.analysis_data,
+            extraction_quality=ra.extraction_quality,
+            stock_mentions=stock_mentions,
+            sector_mentions=sector_mentions,
+            keywords=keywords,
+        )
+
     return ReportDetail(
-        **_to_summary(report).model_dump(),
+        **_to_summary(report, ra).model_dump(),
         ai_summary=report.ai_summary,
         ai_keywords=report.ai_keywords,
         ai_processed_at=report.ai_processed_at,
@@ -149,4 +206,5 @@ async def get_report(report_id: int, db: AsyncSession = Depends(get_db)):
         est_eps=report.est_eps,
         raw_text=report.raw_text,
         source_message_id=report.source_message_id,
+        layer2=layer2,
     )

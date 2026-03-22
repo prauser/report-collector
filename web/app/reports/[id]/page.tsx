@@ -3,6 +3,7 @@ import { formatPrice, opinionColor, sentimentLabel } from "@/lib/utils";
 import Link from "next/link";
 import { ArrowLeft, FileText, Brain, TrendingUp, Calendar, Building2 } from "lucide-react";
 import { notFound } from "next/navigation";
+import Layer2Section from "@/components/Layer2Section";
 
 export default async function ReportDetailPage({
   params,
@@ -29,7 +30,7 @@ export default async function ReportDetailPage({
       {/* 헤더 */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
         <div className="flex items-start justify-between gap-4">
-          <h1 className="text-xl font-semibold text-gray-900 leading-snug">{report.title}</h1>
+          <h1 className="text-xl font-semibold text-gray-900 leading-snug">{report.display_title}</h1>
           {report.opinion && (
             <span className={`shrink-0 px-3 py-1 rounded-full text-sm font-medium ${opinionColor(report.opinion)}`}>
               {report.opinion}
@@ -94,6 +95,9 @@ export default async function ReportDetailPage({
           </div>
         )}
       </div>
+
+      {/* Layer2 심층 분석 */}
+      {report.layer2 && <Layer2Section layer2={report.layer2} />}
 
       {/* AI 분석 */}
       {report.has_ai && (

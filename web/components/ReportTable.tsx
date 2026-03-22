@@ -5,6 +5,27 @@ import type { ReportSummary } from "@/lib/api";
 import { opinionColor, formatPrice, sentimentLabel } from "@/lib/utils";
 import { FileText, Brain, ChevronUp, ChevronDown } from "lucide-react";
 
+function layer2SentimentStyle(sentiment: number | null): { color: string; label: string } | null {
+  if (sentiment === null || sentiment === undefined) return null;
+  if (sentiment >= 0.3) return { color: "bg-green-100 text-green-700", label: "긍정" };
+  if (sentiment <= -0.3) return { color: "bg-red-100 text-red-700", label: "부정" };
+  return { color: "bg-gray-100 text-gray-600", label: "중립" };
+}
+
+function categoryBadge(category: string | null): { label: string; color: string } | null {
+  if (!category) return null;
+  switch (category) {
+    case "stock":
+      return { label: "기업", color: "bg-blue-50 text-blue-700" };
+    case "industry":
+      return { label: "산업", color: "bg-purple-50 text-purple-700" };
+    case "macro":
+      return { label: "매크로", color: "bg-orange-50 text-orange-700" };
+    default:
+      return { label: category, color: "bg-gray-100 text-gray-600" };
+  }
+}
+
 interface Props {
   reports: ReportSummary[];
 }
@@ -36,6 +57,8 @@ export default function ReportTable({ reports }: Props) {
         <tbody className="divide-y divide-gray-100">
           {reports.map((r) => {
             const sentiment = sentimentLabel(r.ai_sentiment);
+            const l2Sentiment = layer2SentimentStyle(r.layer2_sentiment);
+            const catBadge = categoryBadge(r.layer2_category);
             return (
               <tr key={r.id} className="hover:bg-gray-50 transition-colors">
                 <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
@@ -55,12 +78,27 @@ export default function ReportTable({ reports }: Props) {
                   )}
                 </td>
                 <td className="px-4 py-3">
-                  <Link
-                    href={`/reports/${r.id}`}
-                    className="text-blue-600 hover:text-blue-800 hover:underline line-clamp-2"
-                  >
-                    {r.title}
-                  </Link>
+                  <div className="flex items-start gap-1.5 flex-wrap">
+                    {catBadge && (
+                      <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${catBadge.color}`}>
+                        {catBadge.label}
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <Link
+                        href={`/reports/${r.id}`}
+                        className="text-blue-600 hover:text-blue-800 hover:underline line-clamp-2"
+                        title={r.layer2_summary ?? undefined}
+                      >
+                        {r.display_title}
+                      </Link>
+                      {r.layer2_summary && (
+                        <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">
+                          {r.layer2_summary}
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </td>
                 <td className="px-4 py-3">
                   {r.opinion && (
@@ -83,11 +121,16 @@ export default function ReportTable({ reports }: Props) {
                   )}
                 </td>
                 <td className="px-4 py-3 text-center">
-                  {r.has_ai && r.ai_sentiment && (
+                  {/* Layer2 sentiment badge takes priority, falls back to AI sentiment */}
+                  {l2Sentiment ? (
+                    <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${l2Sentiment.color}`}>
+                      {l2Sentiment.label}
+                    </span>
+                  ) : r.has_ai && r.ai_sentiment ? (
                     <span className={`text-xs font-medium ${sentiment.color}`}>
                       {sentiment.label}
                     </span>
-                  )}
+                  ) : null}
                 </td>
                 <td className="px-4 py-3 text-center">
                   <div className="flex items-center justify-center gap-1.5">

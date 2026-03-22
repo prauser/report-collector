@@ -4,6 +4,93 @@ export type { ChatSession, ChatMessage, SseEvent };
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+// ---------------------------------------------------------------------------
+// Layer2 types
+// ---------------------------------------------------------------------------
+
+export interface Layer2StockMention {
+  stock_code: string | null;
+  company_name: string | null;
+  mention_type: string;
+  impact: string | null;
+  relevance_score: number | null;
+}
+
+export interface Layer2SectorMention {
+  sector: string;
+  mention_type: string;
+  impact: string | null;
+}
+
+export interface Layer2Keyword {
+  keyword: string;
+  keyword_type: string | null;
+}
+
+export interface Layer2ChainStep {
+  step: string;
+  text: string;
+  direction?: "positive" | "negative" | "neutral" | "mixed";
+  confidence?: "high" | "medium" | "low";
+}
+
+export interface Layer2Thesis {
+  summary?: string;
+  sentiment?: number | null;
+}
+
+export interface Layer2Opinion {
+  rating?: string;
+  target_price?: number;
+  prev_rating?: string;
+  prev_target_price?: number;
+  change_reason?: string;
+}
+
+export interface Layer2Financials {
+  earnings_quarter?: string;
+  revenue?: string | number;
+  operating_profit?: string | number;
+  eps?: string | number;
+  key_metrics?: Record<string, string | number>;
+}
+
+export interface Layer2Meta {
+  broker?: string;
+  analyst?: string;
+  title?: string;
+  report_type?: string;
+  stock_name?: string;
+  stock_code?: string;
+  sector?: string;
+  opinion?: string;
+  target_price?: number;
+  prev_opinion?: string;
+  prev_target_price?: number;
+}
+
+export interface Layer2AnalysisData {
+  meta?: Layer2Meta;
+  target?: Record<string, string>;
+  thesis?: Layer2Thesis;
+  chain?: Layer2ChainStep[];
+  opinion?: Layer2Opinion;
+  financials?: Layer2Financials;
+}
+
+export interface Layer2Data {
+  report_category: string;
+  analysis_data: Layer2AnalysisData;
+  extraction_quality: string | null;
+  stock_mentions: Layer2StockMention[];
+  sector_mentions: Layer2SectorMention[];
+  keywords: Layer2Keyword[];
+}
+
+// ---------------------------------------------------------------------------
+// Report types
+// ---------------------------------------------------------------------------
+
 export interface ReportSummary {
   id: number;
   broker: string;
@@ -23,6 +110,11 @@ export interface ReportSummary {
   ai_sentiment: string | null;
   collected_at: string;
   source_channel: string;
+  // Layer2 summary fields
+  display_title: string;
+  layer2_summary: string | null;
+  layer2_sentiment: number | null;
+  layer2_category: string | null;
 }
 
 export interface ReportDetail extends ReportSummary {
@@ -38,6 +130,8 @@ export interface ReportDetail extends ReportSummary {
   est_eps: number | null;
   raw_text: string | null;
   source_message_id: number | null;
+  // Layer2 full data
+  layer2: Layer2Data | null;
 }
 
 export interface PaginatedReports {

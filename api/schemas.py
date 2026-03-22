@@ -1,8 +1,49 @@
 """API 응답 Pydantic 스키마."""
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+
+
+# ---------------------------------------------------------------------------
+# Layer2 schemas
+# ---------------------------------------------------------------------------
+
+
+class Layer2StockMention(BaseModel):
+    stock_code: str | None
+    company_name: str | None
+    mention_type: str
+    impact: str | None
+    relevance_score: float | None
+
+
+class Layer2SectorMention(BaseModel):
+    sector: str
+    mention_type: str
+    impact: str | None
+
+
+class Layer2Keyword(BaseModel):
+    keyword: str
+    keyword_type: str | None
+
+
+class Layer2Data(BaseModel):
+    """Layer 2 분석 전체 데이터 (상세 조회용)."""
+
+    report_category: str
+    analysis_data: dict[str, Any]
+    extraction_quality: str | None
+    stock_mentions: list[Layer2StockMention]
+    sector_mentions: list[Layer2SectorMention]
+    keywords: list[Layer2Keyword]
+
+
+# ---------------------------------------------------------------------------
+# Report schemas
+# ---------------------------------------------------------------------------
 
 
 class ReportSummary(BaseModel):
@@ -28,6 +69,11 @@ class ReportSummary(BaseModel):
     ai_sentiment: Decimal | None
     collected_at: datetime
     source_channel: str
+    # Layer2 요약 필드
+    display_title: str
+    layer2_summary: str | None
+    layer2_sentiment: float | None
+    layer2_category: str | None
 
 
 class ReportDetail(ReportSummary):
@@ -46,6 +92,8 @@ class ReportDetail(ReportSummary):
     est_eps: int | None
     raw_text: str | None
     source_message_id: int | None
+    # Layer2 전체 데이터
+    layer2: Layer2Data | None
 
 
 class PaginatedReports(BaseModel):
