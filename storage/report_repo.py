@@ -100,14 +100,25 @@ async def get_reports_needing_pdf(session: AsyncSession, limit: int = 100) -> li
     return result.scalars().all()
 
 
+async def update_pipeline_status(session: AsyncSession, report_id: int, status: str) -> None:
+    """pipeline_status 단독 갱신 헬퍼."""
+    await session.execute(
+        update(Report).where(Report.id == report_id).values(pipeline_status=status)
+    )
+
+
 async def mark_pdf_failed(session: AsyncSession, report_id: int, reason: str = "unknown") -> None:
+    from storage.pdf_archiver import is_retryable_failure
+    retryable = is_retryable_failure(reason)
     await session.execute(
         update(Report).where(Report.id == report_id).values(
             pdf_download_failed=True,
             pdf_fail_reason=reason,
+            pdf_fail_retryable=retryable,
+            pipeline_status="pdf_failed",
         )
     )
-    await session.commit()
+    log.info("pdf_failed", report_id=report_id, reason=reason, retryable=retryable)
 
 
 async def update_pdf_info(
@@ -122,7 +133,6 @@ async def update_pdf_info(
         .where(Report.id == report_id)
         .values(pdf_path=pdf_path, pdf_size_kb=pdf_size_kb, page_count=page_count)
     )
-    await session.commit()
 
 
 async def update_ai_fields(

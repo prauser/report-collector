@@ -61,7 +61,9 @@ class TestDownloadPdf:
 
             with patch("aiohttp.ClientSession") as mock_session_cls:
                 mock_resp = AsyncMock()
+                mock_resp.status = 200
                 mock_resp.read.return_value = fake_content
+                mock_resp.headers = {"Content-Type": "application/pdf"}
                 mock_resp.raise_for_status = MagicMock()
                 mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
                 mock_resp.__aexit__ = AsyncMock(return_value=False)
@@ -76,10 +78,11 @@ class TestDownloadPdf:
                 mock_session.__aexit__ = AsyncMock(return_value=False)
                 mock_session_cls.return_value = mock_session
 
-                rel_path, size_kb = await download_pdf(report)
+                rel_path, size_kb, fail_reason = await download_pdf(report)
 
         assert rel_path is not None
         assert size_kb is not None
+        assert fail_reason is None
         assert (tmp_path / rel_path).exists()
 
     @pytest.mark.asyncio
@@ -97,17 +100,19 @@ class TestDownloadPdf:
                 mock_session.get.side_effect = Exception("connection error")
                 mock_session_cls.return_value = mock_session
 
-                rel_path, size_kb = await download_pdf(report)
+                rel_path, size_kb, fail_reason = await download_pdf(report)
 
         assert rel_path is None
         assert size_kb is None
+        assert fail_reason is not None
 
     @pytest.mark.asyncio
     async def test_no_url_returns_none(self):
         from storage.pdf_archiver import download_pdf
         report = make_report(pdf_url=None)
-        rel_path, size_kb = await download_pdf(report)
+        rel_path, size_kb, fail_reason = await download_pdf(report)
         assert rel_path is None
+        assert fail_reason == "no_url"
 
 
 class TestSafeFilename:
@@ -123,3 +128,56 @@ class TestSafeFilename:
         from storage.pdf_archiver import _safe_filename
         result = _safe_filename("a" * 100, max_len=20)
         assert len(result) <= 20
+
+
+class TestIsRetryableFailure:
+    """is_retryable_failure 함수: 영구 실패 vs 재시도 가능 실패 판별."""
+
+    def test_permanent_http_404(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("http_404") is False
+
+    def test_permanent_http_410(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("http_410") is False
+
+    def test_permanent_not_pdf(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("not_pdf") is False
+
+    def test_permanent_not_pdf_html(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("not_pdf:html_response") is False
+
+    def test_permanent_no_url(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("no_url") is False
+
+    def test_permanent_unsupported_host_prefix(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("unsupported_host:t.me") is False
+
+    def test_permanent_unsupported_host_any_domain(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("unsupported_host:example.com") is False
+
+    def test_retryable_timeout(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("timeout") is True
+
+    def test_retryable_client_error(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("client_error") is True
+
+    def test_retryable_unknown(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("unknown") is True
+
+    def test_retryable_redirect_failed(self):
+        from storage.pdf_archiver import is_retryable_failure
+        assert is_retryable_failure("redirect_failed") is True
+
+    def test_retryable_http_500(self):
+        from storage.pdf_archiver import is_retryable_failure
+        # 5xx errors are transient — should be retryable
+        assert is_retryable_failure("http_500") is True

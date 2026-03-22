@@ -41,6 +41,26 @@ _SHORT_DOMAINS = {"bit.ly", "tinyurl.com", "goo.gl", "is.gd", "t.co", "buly.kr",
 _UNSUPPORTED_DOMAINS = {"t.me"}
 _GDRIVE_PATTERN = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
 
+# PDF 다운로드 실패 분류
+_PERMANENT_FAILURES = {
+    "http_404",
+    "http_410",
+    "not_pdf:html_response",
+    "not_pdf",
+    "no_url",
+}
+_PERMANENT_PREFIXES = ("unsupported_host:",)
+
+
+def is_retryable_failure(reason: str) -> bool:
+    """PDF 다운로드 실패 사유가 재시도 가능한지 판별."""
+    if reason in _PERMANENT_FAILURES:
+        return False
+    for prefix in _PERMANENT_PREFIXES:
+        if reason.startswith(prefix):
+            return False
+    return True
+
 
 def detect_url_type(url: str) -> UrlType:
     """URL 호스트 기반 타입 판별."""
@@ -351,10 +371,12 @@ async def download_and_archive(report: Report, session) -> bool:
     rel_path, size_kb, fail_reason = await download_pdf(report)
     if not rel_path:
         await mark_pdf_failed(session, report.id, fail_reason or "unknown")
+        await session.commit()
         return False
 
     abs_path = settings.pdf_base_path / rel_path
     page_count = get_page_count(abs_path)
 
     await update_pdf_info(session, report.id, rel_path, size_kb, page_count)
+    await session.commit()
     return True
