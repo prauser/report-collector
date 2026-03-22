@@ -14,9 +14,13 @@ import structlog
 from config.settings import settings
 from db.models import calc_cost_usd
 from parser.image_extractor import ExtractedImage
+from parser.rate_limit import RateLimitGate
 from storage.llm_usage_repo import record_llm_usage
 
 log = structlog.get_logger(__name__)
+
+# Global backoff gate — when one chart call hits a Gemini rate limit all callers pause
+_gemini_chart_gate = RateLimitGate("gemini_chart")
 
 _DIGITIZE_PROMPT = """\
 이 이미지는 한국 증권사 리서치 리포트에서 추출한 차트 또는 테이블입니다.
@@ -52,32 +56,54 @@ _GEMINI_TIMEOUT = 60  # 초
 async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]:
     """단일 이미지를 Gemini로 수치화. 타임아웃 적용."""
     from google import genai
+    from google.genai.errors import ClientError as GeminiClientError
 
+    await _gemini_chart_gate.wait()  # gate check BEFORE acquiring semaphore slot
     async with _SEMAPHORE:
         try:
             client = genai.Client(api_key=settings.gemini_api_key)
-
             b64_data = base64.b64encode(image.image_bytes).decode()
 
-            response = await asyncio.wait_for(
-                client.aio.models.generate_content(
-                    model=settings.gemini_model,
-                    contents=[
-                        {
-                            "parts": [
-                                {"text": _DIGITIZE_PROMPT},
+            # Up to 2 attempts; on rate limit trigger the global gate and retry once
+            last_exc: Exception | None = None
+            response = None
+            for attempt in range(2):
+                try:
+                    response = await asyncio.wait_for(
+                        client.aio.models.generate_content(
+                            model=settings.gemini_model,
+                            contents=[
                                 {
-                                    "inline_data": {
-                                        "mime_type": "image/png",
-                                        "data": b64_data,
-                                    }
-                                },
-                            ]
-                        }
-                    ],
-                ),
-                timeout=_GEMINI_TIMEOUT,
-            )
+                                    "parts": [
+                                        {"text": _DIGITIZE_PROMPT},
+                                        {
+                                            "inline_data": {
+                                                "mime_type": "image/png",
+                                                "data": b64_data,
+                                            }
+                                        },
+                                    ]
+                                }
+                            ],
+                        ),
+                        timeout=_GEMINI_TIMEOUT,
+                    )
+                    break  # success
+                except GeminiClientError as e:
+                    if getattr(e, "code", None) != 429:
+                        raise  # non-rate-limit error — propagate immediately
+                    last_exc = e
+                    log.warning(
+                        "digitize_rate_limit",
+                        page=image.page_num,
+                        source=image.source,
+                        attempt=attempt + 1,
+                        error=str(e),
+                    )
+                    await _gemini_chart_gate.trigger_backoff(60.0)
+                    await _gemini_chart_gate.wait()  # wait for gate to reopen before retry
+            else:
+                raise last_exc  # both attempts exhausted
 
             text = response.text or ""
             input_tokens = response.usage_metadata.prompt_token_count or 0

@@ -7,11 +7,15 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from config.settings import settings
 from parser.base import ParsedReport
+from parser.rate_limit import RateLimitGate
 from storage.llm_usage_repo import record_llm_usage
 
 log = structlog.get_logger(__name__)
 
 _client: AsyncAnthropic | None = None
+
+# Global backoff gate — when one S2a call hits a rate limit all callers pause
+_s2a_gate = RateLimitGate("s2a_haiku")
 
 
 def _get_client() -> AsyncAnthropic:
@@ -70,15 +74,25 @@ _S2A_TOOL = {
     reraise=True,
 )
 async def _call_s2a(message_text: str):
+    await _s2a_gate.wait()
     client = _get_client()
-    response = await client.messages.create(
-        model=settings.llm_model,
-        max_tokens=128,
-        system=_S2A_SYSTEM,
-        tools=[_S2A_TOOL],
-        tool_choice={"type": "tool", "name": "classify_message"},
-        messages=[{"role": "user", "content": message_text}],
-    )
+    try:
+        response = await client.messages.create(
+            model=settings.llm_model,
+            max_tokens=128,
+            system=_S2A_SYSTEM,
+            tools=[_S2A_TOOL],
+            tool_choice={"type": "tool", "name": "classify_message"},
+            messages=[{"role": "user", "content": message_text}],
+        )
+    except RateLimitError as e:
+        retry_after = 60.0
+        try:
+            retry_after = float(e.response.headers.get("retry-after", 60))
+        except Exception:
+            pass
+        await _s2a_gate.trigger_backoff(retry_after)
+        raise
     for block in response.content:
         if block.type == "tool_use" and block.name == "classify_message":
             return block.input, response

@@ -12,9 +12,13 @@ import structlog
 
 from config.settings import settings
 from db.models import calc_cost_usd
+from parser.rate_limit import RateLimitGate
 from storage.llm_usage_repo import record_llm_usage
 
 log = structlog.get_logger(__name__)
+
+# Global backoff gate — when one key-data call hits a Gemini rate limit all callers pause
+_gemini_keydata_gate = RateLimitGate("gemini_keydata")
 
 _EXTRACT_PROMPT = """\
 아래는 한국 증권사 리서치 리포트 PDF의 첫 페이지 텍스트입니다.
@@ -88,17 +92,40 @@ async def extract_key_data(
 
     try:
         from google import genai
+        from google.genai.errors import ClientError as GeminiClientError
         import json
 
         client = genai.Client(api_key=settings.gemini_api_key)
-        response = await asyncio.wait_for(
-            client.aio.models.generate_content(
-                model=settings.gemini_model,
-                contents=[{"parts": [{"text": f"{_EXTRACT_PROMPT}\n\n---\n{first_page[:3000]}"}]}],
-                config={"response_mime_type": "application/json"},
-            ),
-            timeout=30,
-        )
+
+        # Up to 2 attempts; on rate limit trigger the global gate and retry once
+        last_exc: Exception | None = None
+        response = None
+        for attempt in range(2):
+            await _gemini_keydata_gate.wait()
+            try:
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=settings.gemini_model,
+                        contents=[{"parts": [{"text": f"{_EXTRACT_PROMPT}\n\n---\n{first_page[:3000]}"}]}],
+                        config={"response_mime_type": "application/json"},
+                    ),
+                    timeout=30,
+                )
+                break  # success
+            except GeminiClientError as e:
+                if getattr(e, "code", None) != 429:
+                    raise  # non-rate-limit client error — propagate immediately
+                last_exc = e
+                log.warning(
+                    "key_data_rate_limit",
+                    attempt=attempt + 1,
+                    error=str(e),
+                    report_id=report_id,
+                )
+                await _gemini_keydata_gate.trigger_backoff(60.0)
+                # loop continues for second attempt
+        else:
+            raise last_exc  # both attempts exhausted
 
         text = response.text or ""
         input_tokens = response.usage_metadata.prompt_token_count or 0
