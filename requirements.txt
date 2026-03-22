@@ -19,6 +19,8 @@ google-genai>=1.0.0
 pypdf>=4.0.0
 pymupdf4llm>=0.0.17
 
+pyyaml>=6.0
+
 structlog==24.4.0
 tenacity==9.0.0
 

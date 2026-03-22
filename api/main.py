@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import reports, stats, pending, backfill, channels, trades
+from api.routers import reports, stats, pending, backfill, channels, trades, agent
 from config.settings import settings
 
 app = FastAPI(
@@ -25,6 +25,7 @@ app.include_router(pending.router, prefix="/api")
 app.include_router(backfill.router, prefix="/api")
 app.include_router(channels.router, prefix="/api")
 app.include_router(trades.router, prefix="/api")
+app.include_router(agent.router, prefix="/api")
 
 
 @app.get("/health")

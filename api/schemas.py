@@ -158,6 +158,47 @@ class TradeStatsResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Agent 챗봇 schemas
+# ---------------------------------------------------------------------------
+
+
+class ChatRequest(BaseModel):
+    """채팅 요청."""
+
+    message: str
+    session_id: int | None = None
+
+
+class ChatSessionResponse(BaseModel):
+    """대화 세션 응답."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str | None
+    user_id: str | None
+    message_count: int
+    created_at: datetime
+    updated_at: datetime | None
+
+
+class ChatMessageResponse(BaseModel):
+    """대화 메시지 응답."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    session_id: int
+    role: str
+    content: str
+    context_report_count: int | None
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+
+
 class LlmUsageStat(BaseModel):
     model: str
     purpose: str

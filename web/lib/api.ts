@@ -1,3 +1,7 @@
+import type { ChatSession, ChatMessage, SseEvent } from "./agent-types";
+
+export type { ChatSession, ChatMessage, SseEvent };
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export interface ReportSummary {
@@ -267,6 +271,78 @@ async function patch<T>(path: string, body: Record<string, unknown>): Promise<T>
 }
 
 export const api = {
+  agent: {
+    getSessions: () =>
+      clientFetch<{ sessions: ChatSession[] }>("/api/agent/sessions").then(
+        (r) => r.sessions
+      ),
+    getMessages: (sessionId: number) =>
+      clientFetch<{ messages: ChatMessage[] }>(
+        `/api/agent/sessions/${sessionId}/messages`
+      ).then((r) => r.messages),
+    deleteSession: async (sessionId: number): Promise<void> => {
+      const res = await fetch(`${BASE}/api/agent/sessions/${sessionId}`, {
+        method: "DELETE",
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`API error ${res.status}: DELETE session`);
+    },
+    /**
+     * Send a chat message and return an async generator of SSE events.
+     * Uses fetch + ReadableStream (not EventSource) so we can POST a body.
+     * Pass an AbortSignal to cancel the stream (e.g. on component unmount).
+     */
+    chat: async function* (
+      message: string,
+      sessionId?: number,
+      signal?: AbortSignal
+    ): AsyncGenerator<SseEvent> {
+      const res = await fetch(`${BASE}/api/agent/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, session_id: sessionId }),
+        cache: "no-store",
+        signal,
+      });
+      if (!res.ok) {
+        throw new Error(`API error ${res.status}: POST /api/agent/chat`);
+      }
+      if (!res.body) throw new Error("No response body for SSE stream");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE lines are separated by \n\n
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+
+          for (const part of parts) {
+            for (const line of part.split("\n")) {
+              if (line.startsWith("data: ")) {
+                const jsonStr = line.slice(6).trim();
+                if (!jsonStr) continue;
+                try {
+                  const event = JSON.parse(jsonStr) as SseEvent;
+                  yield event;
+                } catch {
+                  // ignore malformed JSON
+                }
+              }
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    },
+  },
   reports: {
     list: (params: ReportListParams) =>
       get<PaginatedReports>("/api/reports", params as Record<string, unknown>),

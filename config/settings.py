@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
     llm_timeout: int = 30
 
+    # Agent 챗봇
+    agent_model: str = "claude-sonnet-4-6"
+
     # Gemini (차트/테이블 수치화)
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
