@@ -26,6 +26,15 @@ export default function RootLayout({
             <Link href="/stats" className="text-sm text-gray-600 hover:text-gray-900">
               통계
             </Link>
+            <Link href="/trades" className="text-sm text-gray-600 hover:text-gray-900">
+              체결 내역
+            </Link>
+            <Link href="/trades/review" className="text-sm text-gray-600 hover:text-gray-900">
+              복기 현황
+            </Link>
+            <Link href="/trades/stats" className="text-sm text-gray-600 hover:text-gray-900">
+              매매 통계
+            </Link>
             <Link href="/backfill" className="text-sm text-gray-600 hover:text-gray-900">
               백필
             </Link>
