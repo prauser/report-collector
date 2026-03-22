@@ -177,12 +177,124 @@ async function get<T>(path: string, params?: Record<string, unknown>): Promise<T
   return res.json();
 }
 
+/** Client-side fetch without Next.js cache — use for client components that need fresh data. */
+async function clientFetch<T>(path: string, params?: Record<string, unknown>): Promise<T> {
+  const url = new URL(`${BASE}${path}`);
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== "") {
+        url.searchParams.set(k, String(v));
+      }
+    });
+  }
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  return res.json();
+}
+
+export interface TradeResponse {
+  id: number;
+  symbol: string;
+  name: string | null;
+  side: "buy" | "sell";
+  traded_at: string;
+  price: number;
+  quantity: number;
+  amount: number;
+  broker: string | null;
+  account_type: string | null;
+  market: string | null;
+  fees: number | null;
+  reason: string | null;
+  review: string | null;
+  created_at: string;
+}
+
+export interface TradeListParams {
+  symbol?: string;
+  date_from?: string;
+  date_to?: string;
+  broker?: string;
+  side?: string;
+  account_type?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface TradeListResponse {
+  items: TradeResponse[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface TradeBase {
+  symbol: string;
+  name: string | null;
+  side: string;
+  traded_at: string;
+  price: number;
+  quantity: number;
+  amount: number;
+  broker: string | null;
+  account_type: string | null;
+  market: string | null;
+  fees: number | null;
+}
+
+export interface TradeUploadResponse {
+  inserted: number;
+  skipped: number;
+  preview: TradeBase[] | null;
+}
+
+export interface TradeStatsResponse {
+  total_count: number;
+  buy_count: number;
+  sell_count: number;
+  total_amount: string;
+  symbol_frequency: { symbol: string; count: number }[];
+}
+
+async function patch<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
+  return res.json();
+}
+
 export const api = {
   reports: {
     list: (params: ReportListParams) =>
       get<PaginatedReports>("/api/reports", params as Record<string, unknown>),
     get: (id: number) => get<ReportDetail>(`/api/reports/${id}`),
     filters: () => get<FilterOptions>("/api/reports/filters"),
+  },
+  trades: {
+    list: (params?: TradeListParams) =>
+      clientFetch<TradeListResponse>("/api/trades", params as Record<string, unknown>),
+    stats: () => clientFetch<TradeStatsResponse>("/api/trades/stats"),
+    updateReason: (id: number, reason: string) =>
+      patch<TradeResponse>(`/api/trades/${id}/reason`, { reason }),
+    updateReview: (id: number, review: string) =>
+      patch<TradeResponse>(`/api/trades/${id}/review`, { review }),
+    upload: async (file: File, broker?: string, dryRun?: boolean): Promise<TradeUploadResponse> => {
+      const url = new URL(`${BASE}/api/trades/upload`);
+      if (broker) url.searchParams.set("broker", broker);
+      if (dryRun !== undefined) url.searchParams.set("dry_run", String(dryRun));
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(url.toString(), { method: "POST", body: form });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null);
+        const msg = detail?.detail ?? `API error ${res.status}`;
+        throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+      }
+      return res.json();
+    },
   },
   stats: {
     overview: () => get<OverviewStats>("/api/stats/overview"),

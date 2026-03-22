@@ -7,9 +7,10 @@ interface Props {
   total: number;
   page: number;
   limit: number;
+  basePath?: string;
 }
 
-export default function Pagination({ total, page, limit }: Props) {
+export default function Pagination({ total, page, limit, basePath = "/" }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const totalPages = Math.ceil(total / limit);
@@ -19,7 +20,7 @@ export default function Pagination({ total, page, limit }: Props) {
   function go(p: number) {
     const next = new URLSearchParams(params.toString());
     next.set("page", String(p));
-    router.push(`/?${next.toString()}`);
+    router.push(`${basePath}?${next.toString()}`);
   }
 
   const pages: number[] = [];
