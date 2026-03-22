@@ -161,7 +161,7 @@ async def save_analysis(
         if kw_rows:
             await session.execute(insert(ReportKeyword), kw_rows)
 
-    # 5. reports.analysis_status 업데이트
+    # 5. reports.analysis_status + pipeline_status 업데이트
     status = "truncated" if layer2.markdown_truncated else "done"
     await session.execute(
         update(Report)
@@ -169,6 +169,7 @@ async def save_analysis(
         .values(
             analysis_status=status,
             analysis_version=settings.analysis_schema_version,
+            pipeline_status="done",
         )
     )
 
@@ -215,5 +216,5 @@ async def log_analysis_failure(
     await session.execute(
         update(Report)
         .where(Report.id == report_id)
-        .values(analysis_status="failed")
+        .values(analysis_status="failed", pipeline_status="analysis_failed")
     )

@@ -79,6 +79,12 @@ async def process_single(report: ReportModel) -> dict:
 
     channel = report.source_channel or ""
 
+    # 분석 시작 전 상태 기록
+    from storage.report_repo import update_pipeline_status
+    async with AsyncSessionLocal() as session:
+        await update_pipeline_status(session, report.id, "analysis_pending")
+        await session.commit()
+
     # ③ 키 데이터 추출
     try:
         key_data = await extract_key_data(abs_path, report_id=report.id, channel=channel)
@@ -247,12 +253,24 @@ async def main(args: argparse.Namespace) -> None:
     ]
 
     try:
-        batch_results = await run_layer2_batch(batch_requests)
+        batch_results, failed_ids = await run_layer2_batch(batch_requests)
     except Exception as e:
         log.error("layer2_batch_failed", error=str(e))
         print(f"\nLayer2 Batch failed: {e}")
         print(f"=== Done: {len(results)} processed, Layer2 FAILED ===")
         return
+
+    # failed_ids → pipeline_status='analysis_failed'
+    if failed_ids:
+        from storage.report_repo import update_pipeline_status
+        for failed_cid in failed_ids:
+            failed_inp = layer2_inputs.get(failed_cid)
+            if failed_inp:
+                async with AsyncSessionLocal() as session:
+                    await update_pipeline_status(session, failed_inp["report_id"], "analysis_failed")
+                    await session.commit()
+                log.warning("layer2_batch_failed_set_status",
+                            report_id=failed_inp["report_id"], custom_id=failed_cid)
 
     # Phase 3: Batch 결과 저장
     print(f"\n>>> Phase 3: 결과 저장 ({len(batch_results)}/{len(layer2_inputs)}건)...")

@@ -25,7 +25,7 @@ from parser.normalizer import normalize_broker, normalize_opinion, parse_price
 from storage import stock_mapper
 from storage.pdf_archiver import download_pdf, download_telegram_document, resolve_tme_links
 from storage.pending_repo import save_pending
-from storage.report_repo import mark_pdf_failed, update_pdf_info, upsert_report
+from storage.report_repo import mark_pdf_failed, update_pdf_info, update_pipeline_status, upsert_report
 from storage.analysis_repo import save_markdown, save_analysis, log_analysis_failure
 
 log = structlog.get_logger(__name__)
@@ -173,6 +173,9 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
             if not report:
                 continue
 
+            # S2a 완료 후 상태 기록
+            await update_pipeline_status(session, report.id, "s2a_done")
+
             # 2) PDF 다운로드
             if pdf_fname and not report.pdf_path:
                 rel_path, size_kb = await download_telegram_document(client, message, report)
@@ -202,8 +205,12 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
                 if rel_path:
                     await update_pdf_info(session, report.id, rel_path, size_kb, None)
                     report.pdf_path = rel_path
+                    await update_pipeline_status(session, report.id, "pdf_done")
                 else:
                     await mark_pdf_failed(session, report.id, fail_reason or "unknown")
+            elif report.pdf_path:
+                # PDF가 이미 있는 경우 (telegram document 다운로드 완료)
+                await update_pipeline_status(session, report.id, "pdf_done")
 
             # 분석(키데이터/마크다운/이미지/Gemini/Layer2)은 run_analysis.py에서 배치 처리
             await session.commit()
