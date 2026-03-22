@@ -12,6 +12,7 @@ from api.schemas import (
     TradeBase,
     TradeDetailResponse,
     TradeIndicatorResponse,
+    TradeListResponse,
     TradeResponse,
     TradeStatsResponse,
     TradeUpdateRequest,
@@ -22,6 +23,7 @@ from trades.csv_parsers import detect_broker, get_parser
 from trades.csv_parsers.common import TradeRow
 from trades.trade_repo import (
     TradeFilters,
+    count_trades,
     get_chart_data,
     get_trade,
     get_trade_stats,
@@ -189,7 +191,7 @@ async def chart_data(
 # GET /trades
 # ---------------------------------------------------------------------------
 
-@router.get("", response_model=list[TradeResponse])
+@router.get("", response_model=TradeListResponse)
 async def list_trades(
     symbol: str | None = Query(None),
     date_from: datetime | None = Query(None),
@@ -212,8 +214,14 @@ async def list_trades(
         offset=offset,
         limit=limit,
     )
+    total = await count_trades(db, filters)
     trades = await get_trades(db, filters)
-    return [_trade_to_response(t) for t in trades]
+    return TradeListResponse(
+        items=[_trade_to_response(t) for t in trades],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ---------------------------------------------------------------------------

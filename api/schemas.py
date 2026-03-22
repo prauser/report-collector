@@ -145,6 +145,15 @@ class TradeUpdateRequest(BaseModel):
     review: str | None = None
 
 
+class TradeListResponse(BaseModel):
+    """매매 목록 페이지네이션 응답."""
+
+    items: list[TradeResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class TradeStatsResponse(BaseModel):
     """매매 통계."""
 

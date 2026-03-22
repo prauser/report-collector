@@ -299,24 +299,76 @@ class TestUploadSave:
 # ---------------------------------------------------------------------------
 
 class TestListTrades:
-    def test_returns_empty_list(self, client):
+    def test_returns_paginated_response_shape(self, client):
+        """Response must be { items, total, limit, offset }, not a plain array."""
         c, session = client
-        with patch("api.routers.trades.get_trades", new_callable=AsyncMock, return_value=[]) as mock_get:
-            resp = c.get("/api/trades")
-        assert resp.status_code == 200
-        assert resp.json() == []
-        mock_get.assert_called_once()
-
-    def test_returns_trade_list(self, client):
-        c, session = client
-        trade = _make_trade_model(trade_id=1)
-        with patch("api.routers.trades.get_trades", new_callable=AsyncMock, return_value=[trade]):
+        with (
+            patch("api.routers.trades.get_trades", new_callable=AsyncMock, return_value=[]),
+            patch("api.routers.trades.count_trades", new_callable=AsyncMock, return_value=0),
+        ):
             resp = c.get("/api/trades")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 1
-        assert data[0]["id"] == 1
-        assert data[0]["symbol"] == "005930"
+        assert "items" in data
+        assert "total" in data
+        assert "limit" in data
+        assert "offset" in data
+        assert data["items"] == []
+        assert data["total"] == 0
+
+    def test_returns_empty_items_when_no_trades(self, client):
+        c, session = client
+        with (
+            patch("api.routers.trades.get_trades", new_callable=AsyncMock, return_value=[]) as mock_get,
+            patch("api.routers.trades.count_trades", new_callable=AsyncMock, return_value=0),
+        ):
+            resp = c.get("/api/trades")
+        assert resp.status_code == 200
+        assert resp.json()["items"] == []
+        assert resp.json()["total"] == 0
+        mock_get.assert_called_once()
+
+    def test_returns_trade_list_in_items(self, client):
+        c, session = client
+        trade = _make_trade_model(trade_id=1)
+        with (
+            patch("api.routers.trades.get_trades", new_callable=AsyncMock, return_value=[trade]),
+            patch("api.routers.trades.count_trades", new_callable=AsyncMock, return_value=1),
+        ):
+            resp = c.get("/api/trades")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert len(data["items"]) == 1
+        assert data["items"][0]["id"] == 1
+        assert data["items"][0]["symbol"] == "005930"
+
+    def test_total_reflects_filtered_count_not_page_size(self, client):
+        """total should be the count of all matching records, not just the page."""
+        c, session = client
+        trade = _make_trade_model(trade_id=1)
+        # 50 total records but only 1 returned on this page
+        with (
+            patch("api.routers.trades.get_trades", new_callable=AsyncMock, return_value=[trade]),
+            patch("api.routers.trades.count_trades", new_callable=AsyncMock, return_value=50),
+        ):
+            resp = c.get("/api/trades?limit=1&offset=0")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 50
+        assert len(data["items"]) == 1
+
+    def test_limit_and_offset_echoed_in_response(self, client):
+        c, _ = client
+        with (
+            patch("api.routers.trades.get_trades", new_callable=AsyncMock, return_value=[]),
+            patch("api.routers.trades.count_trades", new_callable=AsyncMock, return_value=0),
+        ):
+            resp = c.get("/api/trades?limit=25&offset=50")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limit"] == 25
+        assert data["offset"] == 50
 
     def test_query_params_passed_to_filters(self, client):
         """Filter query params should be forwarded to get_trades."""
@@ -327,7 +379,10 @@ class TestListTrades:
             captured["filters"] = filters
             return []
 
-        with patch("api.routers.trades.get_trades", side_effect=mock_get_trades):
+        with (
+            patch("api.routers.trades.get_trades", side_effect=mock_get_trades),
+            patch("api.routers.trades.count_trades", new_callable=AsyncMock, return_value=0),
+        ):
             resp = c.get("/api/trades?symbol=005930&side=buy&limit=10&offset=5")
 
         assert resp.status_code == 200
