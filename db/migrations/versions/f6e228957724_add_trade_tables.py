@@ -1,7 +1,7 @@
 """add_trade_tables
 
 Revision ID: f6e228957724
-Revises: 1f0105e742c5
+Revises: d4b7f2e9a316
 Create Date: 2026-03-21 10:02:23.403916
 
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = 'f6e228957724'
-down_revision: Union[str, None] = '1f0105e742c5'
+down_revision: Union[str, None] = 'd4b7f2e9a316'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
