@@ -10,6 +10,10 @@ python-dotenv==1.0.1
 
 pykrx==1.2.4
 
+pandas>=2.0.0
+pandas-ta>=0.3.14b0
+numpy>=1.24.0
+
 aiohttp==3.11.10
 aiofiles==24.1.0
 

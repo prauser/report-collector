@@ -408,9 +408,33 @@ class TradePair(Base):
     profit_rate: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     holding_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # 감사 컬럼 (audit columns)
+    matched_qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    buy_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    sell_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    buy_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
+    sell_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
+
     __table_args__ = (
         Index("ix_trade_pairs_buy_trade_id", "buy_trade_id"),
         Index("ix_trade_pairs_sell_trade_id", "sell_trade_id"),
+    )
+
+
+class PriceCache(Base):
+    """종목별 OHLCV 일봉 캐시 테이블."""
+    __tablename__ = "price_cache"
+
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, primary_key=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, primary_key=True)
+    open: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    high: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    low: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    close: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    __table_args__ = (
+        Index("ix_price_cache_symbol", "symbol"),
     )
 
 

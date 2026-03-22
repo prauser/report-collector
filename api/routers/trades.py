@@ -1,24 +1,31 @@
 """매매 내역 API 엔드포인트."""
 from __future__ import annotations
 
+import dataclasses
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+import structlog
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile
 from sqlalchemy import select as sa_select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db
 from api.schemas import (
+    IndicatorResponse,
+    OhlcvResponse,
+    PositionResponse,
     TradeBase,
     TradeDetailResponse,
     TradeIndicatorResponse,
     TradeListResponse,
+    TradePairResponse,
     TradeResponse,
     TradeStatsResponse,
     TradeUpdateRequest,
     TradeUploadResponse,
 )
-from db.models import Trade, TradeIndicator
+from db.models import PriceCache, Trade, TradeIndicator, TradePair
+from db.session import AsyncSessionLocal
 from trades.csv_parsers import detect_broker, get_parser
 from trades.csv_parsers.common import TradeRow
 from trades.trade_repo import (
@@ -33,7 +40,10 @@ from trades.trade_repo import (
     upsert_trades,
 )
 
+log = structlog.get_logger(__name__)
+
 router = APIRouter(prefix="/trades", tags=["trades"])
+ohlcv_router = APIRouter(prefix="/ohlcv", tags=["ohlcv"])
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +100,63 @@ def _indicator_to_response(ind: TradeIndicator) -> TradeIndicatorResponse:
     )
 
 
+def _pair_to_response(pair: TradePair) -> TradePairResponse:
+    return TradePairResponse(
+        id=pair.id,
+        buy_trade_id=pair.buy_trade_id,
+        sell_trade_id=pair.sell_trade_id,
+        profit_rate=pair.profit_rate,
+        holding_days=pair.holding_days,
+        matched_qty=pair.matched_qty,
+        buy_amount=pair.buy_amount,
+        sell_amount=pair.sell_amount,
+        buy_fee=pair.buy_fee,
+        sell_fee=pair.sell_fee,
+    )
+
+
+def _stoch_set_to_dict(s) -> dict:
+    """Convert StochSet dataclass to plain dict for JSON serialization."""
+    if dataclasses.is_dataclass(s) and not isinstance(s, type):
+        return dataclasses.asdict(s)
+    return s
+
+
+def _serialize_stochastic(stoch: dict) -> dict:
+    """Recursively convert stochastic dict to JSON-serializable form."""
+    result = {}
+    for timeframe, sets in stoch.items():
+        result[timeframe] = [_stoch_set_to_dict(s) for s in sets]
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Background task helpers
+# ---------------------------------------------------------------------------
+
+async def _bg_ohlcv_and_match(symbols: list[str]) -> None:
+    """BackgroundTask: OHLCV 수집 + FIFO 매칭. 자체 세션 사용."""
+    from trades.ohlcv import fetch_ohlcv_batch
+    from trades.pairing import match_trades_fifo
+
+    try:
+        async with AsyncSessionLocal() as session:
+            log.info("bg_ohlcv_start", symbols=symbols)
+            await fetch_ohlcv_batch(session, symbols)
+            log.info("bg_ohlcv_done", symbols=symbols)
+
+        # Separate session for each symbol match to avoid lock contention
+        for symbol in symbols:
+            try:
+                async with AsyncSessionLocal() as session:
+                    await match_trades_fifo(symbol, session)
+                    log.info("bg_fifo_done", symbol=symbol)
+            except Exception as exc:
+                log.error("bg_fifo_error", symbol=symbol, error=str(exc))
+    except Exception as exc:
+        log.error("bg_ohlcv_match_error", error=str(exc))
+
+
 # ---------------------------------------------------------------------------
 # POST /trades/upload
 # ---------------------------------------------------------------------------
@@ -97,6 +164,7 @@ def _indicator_to_response(ind: TradeIndicator) -> TradeIndicatorResponse:
 @router.post("/upload", response_model=TradeUploadResponse)
 async def upload_trades(
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     dry_run: bool = Query(False, description="true이면 DB 저장 없이 파싱 결과만 반환"),
     broker: str | None = Query(None, description="브로커 명시 (미지정 시 자동 감지)"),
     db: AsyncSession = Depends(get_db),
@@ -105,6 +173,7 @@ async def upload_trades(
 
     - dry_run=true이면 파싱 결과만 반환 (DB 저장 안 함)
     - broker 미지정 시 헤더로 자동 감지
+    - 저장 성공 시 OHLCV 수집 + FIFO 매칭을 BackgroundTask로 트리거
     """
     content = await file.read()
 
@@ -137,6 +206,12 @@ async def upload_trades(
         )
 
     result = await upsert_trades(db, rows)
+
+    # Trigger OHLCV collection + FIFO matching in background
+    if result["inserted"] > 0:
+        symbols = list({r.symbol for r in rows})
+        background_tasks.add_task(_bg_ohlcv_and_match, symbols)
+
     return TradeUploadResponse(
         inserted=result["inserted"],
         skipped=result["skipped"],
@@ -188,6 +263,89 @@ async def chart_data(
 
 
 # ---------------------------------------------------------------------------
+# GET /trades/pairs — FIFO 매칭 결과 목록  (must be BEFORE /{trade_id})
+# ---------------------------------------------------------------------------
+
+@router.get("/pairs", response_model=list[TradePairResponse])
+async def list_trade_pairs(
+    symbol: str | None = Query(None, description="종목 코드 필터 (없으면 전체)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """FIFO 매칭 결과 목록 조회.
+
+    symbol을 지정하면 해당 종목의 매칭 결과만 반환.
+    """
+    if symbol:
+        # Join trade_pairs with trades to filter by symbol
+        buy_ids_stmt = sa_select(Trade.id).where(
+            Trade.symbol == symbol,
+            Trade.side == "buy",
+        )
+        sell_ids_stmt = sa_select(Trade.id).where(
+            Trade.symbol == symbol,
+            Trade.side == "sell",
+        )
+        buy_ids_result = await db.execute(buy_ids_stmt)
+        sell_ids_result = await db.execute(sell_ids_stmt)
+        buy_ids = [r for r, in buy_ids_result]
+        sell_ids = [r for r, in sell_ids_result]
+
+        if not buy_ids and not sell_ids:
+            return []
+
+        stmt = sa_select(TradePair).where(
+            TradePair.buy_trade_id.in_(buy_ids) | TradePair.sell_trade_id.in_(sell_ids)
+        )
+    else:
+        stmt = sa_select(TradePair)
+
+    result = await db.execute(stmt)
+    pairs = result.scalars().all()
+    return [_pair_to_response(p) for p in pairs]
+
+
+# ---------------------------------------------------------------------------
+# GET /trades/positions — 평균단가 포지션 (must be BEFORE /{trade_id})
+# ---------------------------------------------------------------------------
+
+@router.get("/positions", response_model=list[PositionResponse])
+async def list_positions(
+    db: AsyncSession = Depends(get_db),
+):
+    """평균단가 기반 미실현 포지션 목록. 잔여 수량이 있는 종목만 반환."""
+    from trades.pairing import calculate_avg_cost
+
+    # Get all distinct symbols
+    stmt = sa_select(Trade.symbol).distinct()
+    result = await db.execute(stmt)
+    symbols = [row for row, in result]
+
+    positions = []
+    for sym in symbols:
+        pos = await calculate_avg_cost(sym, db)
+        if pos.remaining_qty > 0:
+            # Convert Decimal prices in open_lots to float for JSON serialization
+            open_lots = [
+                {
+                    "buy_trade_id": lot["buy_trade_id"],
+                    "qty": lot["qty"],
+                    "price": float(lot["price"]),
+                }
+                for lot in pos.open_lots
+            ]
+            positions.append(
+                PositionResponse(
+                    symbol=pos.symbol,
+                    avg_cost=pos.avg_cost,
+                    remaining_qty=pos.remaining_qty,
+                    open_lots=open_lots,
+                )
+            )
+
+    return positions
+
+
+# ---------------------------------------------------------------------------
 # GET /trades
 # ---------------------------------------------------------------------------
 
@@ -221,6 +379,44 @@ async def list_trades(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /trades/{trade_id}/indicators — on-demand 지표 계산
+# ---------------------------------------------------------------------------
+
+@router.get("/{trade_id}/indicators", response_model=IndicatorResponse)
+async def get_trade_indicators(
+    trade_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """매매 시점의 기술지표를 price_cache에서 계산하여 반환.
+
+    price_cache에 해당 종목/날짜 데이터가 없으면 404.
+    """
+    from trades.indicators import calculate_indicators_for_trade, generate_snapshot_text
+
+    trade = await get_trade(db, trade_id=trade_id)
+    if trade is None:
+        raise HTTPException(status_code=404, detail="Trade not found")
+
+    target_date = trade.traded_at.date() if hasattr(trade.traded_at, "date") else trade.traded_at
+
+    try:
+        result = await calculate_indicators_for_trade(trade.symbol, target_date, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    snapshot = generate_snapshot_text(result)
+
+    return IndicatorResponse(
+        stochastic=_serialize_stochastic(result.stochastic),
+        ma=result.ma,
+        bb=result.bb,
+        volume_ratio=result.volume_ratio,
+        candle=result.candle,
+        snapshot_text=snapshot,
     )
 
 
@@ -291,3 +487,62 @@ async def patch_trade_review(
     except ValueError:
         raise HTTPException(status_code=404, detail="Trade not found")
     return _trade_to_response(trade)
+
+
+# ---------------------------------------------------------------------------
+# OHLCV router endpoints
+# ---------------------------------------------------------------------------
+
+@ohlcv_router.get("/{symbol}", response_model=list[OhlcvResponse])
+async def get_ohlcv(
+    symbol: str,
+    from_date: date | None = Query(None, alias="from", description="시작일 YYYY-MM-DD"),
+    to_date: date | None = Query(None, alias="to", description="종료일 YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+):
+    """price_cache에서 OHLCV 데이터 조회 (차트용).
+
+    from/to 날짜 필터 지원.
+    """
+    stmt = sa_select(PriceCache).where(PriceCache.symbol == symbol)
+    if from_date:
+        stmt = stmt.where(PriceCache.date >= from_date)
+    if to_date:
+        stmt = stmt.where(PriceCache.date <= to_date)
+    stmt = stmt.order_by(PriceCache.date.asc())
+
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+
+    return [
+        OhlcvResponse(
+            date=row.date,
+            open=row.open,
+            high=row.high,
+            low=row.low,
+            close=row.close,
+            volume=row.volume,
+        )
+        for row in rows
+    ]
+
+
+@ohlcv_router.post("/refresh")
+async def refresh_ohlcv(
+    background_tasks: BackgroundTasks,
+):
+    """price_cache에 이미 있는 모든 종목의 OHLCV를 최신 날짜까지 갱신.
+
+    BackgroundTask로 실행 (non-blocking).
+    """
+    async def _do_refresh() -> None:
+        from trades.ohlcv import refresh_cached_symbols
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await refresh_cached_symbols(session)
+                log.info("ohlcv_refresh_complete", symbols=len(result))
+        except Exception as exc:
+            log.error("ohlcv_refresh_error", error=str(exc))
+
+    background_tasks.add_task(_do_refresh)
+    return {"status": "refresh_triggered"}

@@ -214,6 +214,61 @@ class TradeStatsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 schemas: OHLCV, indicators, FIFO pairs, positions
+# ---------------------------------------------------------------------------
+
+
+class OhlcvResponse(BaseModel):
+    """OHLCV 캔들 데이터 (price_cache 한 행)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
+class IndicatorResponse(BaseModel):
+    """기술지표 계산 결과 (on-demand)."""
+
+    stochastic: dict
+    ma: dict
+    bb: dict
+    volume_ratio: float | None
+    candle: dict
+    snapshot_text: str
+
+
+class TradePairResponse(BaseModel):
+    """FIFO 매칭 결과."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    buy_trade_id: int
+    sell_trade_id: int
+    profit_rate: Decimal | None
+    holding_days: int | None
+    matched_qty: int
+    buy_amount: Decimal
+    sell_amount: Decimal
+    buy_fee: Decimal
+    sell_fee: Decimal
+
+
+class PositionResponse(BaseModel):
+    """평균단가 기반 현재 포지션."""
+
+    symbol: str
+    avg_cost: Decimal
+    remaining_qty: int
+    open_lots: list[dict]
+
+
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
