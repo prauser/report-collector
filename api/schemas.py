@@ -45,6 +45,7 @@ class ReportDetail(ReportSummary):
     est_op_profit: int | None
     est_eps: int | None
     raw_text: str | None
+    source_message_id: int | None
 
 
 class PaginatedReports(BaseModel):

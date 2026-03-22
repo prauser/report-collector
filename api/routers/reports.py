@@ -148,4 +148,5 @@ async def get_report(report_id: int, db: AsyncSession = Depends(get_db)):
         est_op_profit=report.est_op_profit,
         est_eps=report.est_eps,
         raw_text=report.raw_text,
+        source_message_id=report.source_message_id,
     )

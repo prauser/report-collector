@@ -285,9 +285,8 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
                 continue
 
             text = message.text or ""
-            pdf_fname = None
+            pdf_fname = _pdf_filename(message)  # 항상 체크
             if not text:
-                pdf_fname = _pdf_filename(message)
                 if not pdf_fname:
                     continue
                 text = pdf_fname

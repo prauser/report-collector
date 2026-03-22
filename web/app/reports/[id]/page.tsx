@@ -147,6 +147,19 @@ export default async function ReportDetailPage({
               PDF 다운로드
             </a>
           )}
+          {report.source_channel && report.source_message_id && (
+            <a
+              href={`https://t.me/${report.source_channel.replace(/^@/, "")}/${report.source_message_id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+            >
+              텔레그램 원문
+            </a>
+          )}
+          {!report.pdf_url && !(report.source_channel && report.source_message_id) && (
+            <span className="text-gray-400 self-center">원본 자료 없음</span>
+          )}
           {report.pdf_size_kb && (
             <span className="text-gray-500 self-center">{report.pdf_size_kb} KB · {report.page_count}페이지</span>
           )}

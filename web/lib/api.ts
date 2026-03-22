@@ -37,6 +37,7 @@ export interface ReportDetail extends ReportSummary {
   est_op_profit: number | null;
   est_eps: number | null;
   raw_text: string | null;
+  source_message_id: number | null;
 }
 
 export interface PaginatedReports {

@@ -122,9 +122,8 @@ async def handle_new_message(event: events.NewMessage.Event) -> None:
         return
 
     text = message.text or ""
-    pdf_fname = None
+    pdf_fname = _pdf_filename(message)  # 항상 체크
     if not text.strip():
-        pdf_fname = _pdf_filename(message)
         if not pdf_fname:
             return
         text = pdf_fname
