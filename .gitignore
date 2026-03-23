@@ -16,8 +16,8 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# PDF 데이터
-data/pdfs/
+# PDF/테스트 데이터
+data/
 
 # IDE
 .vscode/
@@ -35,4 +35,12 @@ web/.env.local
 
 # Claude uploads
 .claude-uploads/
-`
+
+# Claude Code
+.claude/
+
+# 임시 파일
+HANDOFF.md
+TASK_RESULT.md
+bash.exe.stackdump
+~/
