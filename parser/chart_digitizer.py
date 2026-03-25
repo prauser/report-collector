@@ -50,7 +50,7 @@ class DigitizeResult:
     success_count: int = 0
 
 
-_GEMINI_TIMEOUT = 60  # 초
+_GEMINI_TIMEOUT = 90  # 초
 
 
 async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]:
@@ -58,18 +58,20 @@ async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]
     from google import genai
     from google.genai.errors import ClientError as GeminiClientError
 
-    await _gemini_chart_gate.wait()  # gate check BEFORE acquiring semaphore slot
-    async with _SEMAPHORE:
-        try:
-            client = genai.Client(api_key=settings.gemini_api_key)
-            b64_data = base64.b64encode(image.image_bytes).decode()
+    client = genai.Client(api_key=settings.gemini_api_key)
+    b64_data = base64.b64encode(image.image_bytes).decode()
 
-            # Up to 2 attempts; on rate limit trigger the global gate and retry once
-            last_exc: Exception | None = None
-            response = None
-            for attempt in range(2):
-                try:
-                    response = await asyncio.wait_for(
+    # Up to 2 attempts; on rate limit, release the semaphore BEFORE backoff sleep
+    # so other callers are not blocked during the 60-second wait.
+    last_exc: Exception | None = None
+    response = None
+    try:
+        for attempt in range(2):
+            await _gemini_chart_gate.wait()  # gate check BEFORE acquiring semaphore slot
+            await _SEMAPHORE.acquire()
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.shield(
                         client.aio.models.generate_content(
                             model=settings.gemini_model,
                             contents=[
@@ -85,52 +87,57 @@ async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]
                                     ]
                                 }
                             ],
-                        ),
-                        timeout=_GEMINI_TIMEOUT,
-                    )
-                    break  # success
-                except GeminiClientError as e:
-                    if getattr(e, "code", None) != 429:
-                        raise  # non-rate-limit error — propagate immediately
-                    last_exc = e
-                    log.warning(
-                        "digitize_rate_limit",
-                        page=image.page_num,
-                        source=image.source,
-                        attempt=attempt + 1,
-                        error=str(e),
-                    )
-                    await _gemini_chart_gate.trigger_backoff(60.0)
-                    await _gemini_chart_gate.wait()  # wait for gate to reopen before retry
-            else:
-                raise last_exc  # both attempts exhausted
-
-            text = response.text or ""
-            input_tokens = response.usage_metadata.prompt_token_count or 0
-            output_tokens = response.usage_metadata.candidates_token_count or 0
-
-            # N/A 응답 필터링
-            if text.strip().upper() == "N/A":
-                return None, input_tokens, output_tokens
-
-            return text.strip(), input_tokens, output_tokens
-
-        except asyncio.TimeoutError:
+                        )
+                    ),
+                    timeout=_GEMINI_TIMEOUT,
+                )
+                break  # success
+            except GeminiClientError as e:
+                if getattr(e, "code", None) not in (429, 503):
+                    raise  # non-retryable error — propagate immediately
+                last_exc = e
+            finally:
+                _SEMAPHORE.release()
+            # Backoff happens OUTSIDE semaphore so other callers are not blocked
+            error_code = getattr(last_exc, "code", None)
             log.warning(
-                "digitize_timeout",
+                "digitize_retryable",
                 page=image.page_num,
                 source=image.source,
-                timeout=_GEMINI_TIMEOUT,
+                attempt=attempt + 1,
+                code=error_code,
+                error=str(last_exc),
             )
-            return None, 0, 0
-        except Exception as e:
-            log.warning(
-                "digitize_failed",
-                page=image.page_num,
-                source=image.source,
-                error=str(e),
-            )
-            return None, 0, 0
+            backoff = 60.0 if error_code == 429 else 10.0
+            await _gemini_chart_gate.trigger_backoff(backoff)
+        else:
+            raise last_exc  # both attempts exhausted
+    except asyncio.TimeoutError:
+        log.warning(
+            "digitize_timeout",
+            page=image.page_num,
+            source=image.source,
+            timeout=_GEMINI_TIMEOUT,
+        )
+        return None, 0, 0
+    except Exception as e:
+        log.warning(
+            "digitize_failed",
+            page=image.page_num,
+            source=image.source,
+            error=str(e),
+        )
+        return None, 0, 0
+
+    text = response.text or ""
+    input_tokens = response.usage_metadata.prompt_token_count or 0
+    output_tokens = response.usage_metadata.candidates_token_count or 0
+
+    # N/A 응답 필터링
+    if text.strip().upper() == "N/A":
+        return None, input_tokens, output_tokens
+
+    return text.strip(), input_tokens, output_tokens
 
 
 async def digitize_charts(

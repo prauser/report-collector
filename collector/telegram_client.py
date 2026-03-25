@@ -18,5 +18,9 @@ def get_client() -> TelegramClient:
             session,
             settings.telegram_api_id,
             settings.telegram_api_hash,
+            connection_retries=3,
+            retry_delay=5,
+            timeout=30,
+            request_retries=3,
         )
     return _client

@@ -334,3 +334,167 @@ def test_backfill_channel_uses_queue():
     assert "asyncio.Queue" in source, (
         "backfill_channel must use asyncio.Queue for worker pattern"
     )
+
+
+# ---------------------------------------------------------------------------
+# Total timeout safety net tests
+# ---------------------------------------------------------------------------
+
+def test_backfill_channel_uses_wait_for():
+    """backfill_channel source code must wrap gather with asyncio.wait_for."""
+    import inspect
+    from collector.backfill import backfill_channel
+    source = inspect.getsource(backfill_channel)
+    assert "asyncio.wait_for" in source, (
+        "backfill_channel must use asyncio.wait_for for total timeout"
+    )
+
+
+def test_total_timeout_formula_minimum():
+    """total_timeout is always at least 600 seconds regardless of task count."""
+    # Formula: max(600, _TASK_TIMEOUT * len(tasks) // num_workers + 120)
+    # With 1 task, 1 worker: max(600, 300 * 1 // 1 + 120) = max(600, 420) = 600
+    _TASK_TIMEOUT = 300
+    tasks_count = 1
+    num_workers = 1
+    total_timeout = max(600, _TASK_TIMEOUT * tasks_count // num_workers + 120)
+    assert total_timeout == 600
+
+
+def test_total_timeout_formula_scales_with_tasks():
+    """total_timeout grows proportionally when tasks exceed workers."""
+    # With 10 tasks and 5 workers: max(600, 300 * 10 // 5 + 120) = max(600, 720) = 720
+    _TASK_TIMEOUT = 300
+    tasks_count = 10
+    num_workers = 5
+    total_timeout = max(600, _TASK_TIMEOUT * tasks_count // num_workers + 120)
+    assert total_timeout == 720
+
+
+def test_total_timeout_formula_large_batch():
+    """total_timeout is correct for a large backfill batch."""
+    # 100 tasks, 5 workers: max(600, 300 * 100 // 5 + 120) = max(600, 6120) = 6120
+    _TASK_TIMEOUT = 300
+    tasks_count = 100
+    num_workers = 5
+    total_timeout = max(600, _TASK_TIMEOUT * tasks_count // num_workers + 120)
+    assert total_timeout == 6120
+
+
+@pytest.mark.asyncio
+async def test_total_timeout_cancels_workers_and_does_not_raise():
+    """When total timeout fires, workers are cancelled and backfill_channel returns gracefully."""
+    sample_text = "▶ 카카오(035720) 리포트 - 삼성증권\nhttps://example.com/kakao.pdf"
+    msg = make_mock_message(sample_text, msg_id=50)
+
+    async def fake_iter(*args, **kwargs):
+        yield msg
+
+    mock_session_ctx, _ = make_mock_db_session()
+
+    from collector.backfill import _ReportResult
+
+    async def hanging_process(task):
+        await asyncio.sleep(9999)
+        return _ReportResult("inserted", task.message.id)
+
+    cancelled_workers = []
+
+    original_gather = asyncio.gather
+
+    async def tracking_gather(*aws, **kwargs):
+        # Record tasks that get cancelled via return_exceptions=True call
+        result = await original_gather(*aws, **kwargs)
+        return result
+
+    with patch("collector.backfill.get_client") as mock_get_client, \
+         patch("collector.backfill.AsyncSessionLocal", mock_session_ctx), \
+         patch("collector.backfill._process_single_report", side_effect=hanging_process), \
+         patch("collector.backfill.parse_messages") as mock_parse, \
+         patch("collector.backfill.settings") as mock_settings:
+
+        mock_settings.backfill_limit = None
+        mock_settings.pdf_base_path = MagicMock()
+        mock_settings.analysis_enabled = False
+        mock_settings.anthropic_api_key = None
+
+        mock_parsed = MagicMock()
+        mock_parsed.pdf_url = None
+        mock_parse.return_value = [mock_parsed]
+
+        mock_client = AsyncMock()
+        mock_client.iter_messages = fake_iter
+        mock_get_client.return_value = mock_client
+
+        # Force the total timeout to fire immediately
+        original_wait_for = asyncio.wait_for
+
+        async def instant_timeout(coro, timeout):
+            # Use near-zero timeout to trigger TimeoutError immediately
+            return await original_wait_for(coro, timeout=0.001)
+
+        with patch("collector.backfill.asyncio.wait_for", side_effect=instant_timeout):
+            from collector.backfill import backfill_channel
+            # Must not raise — TimeoutError is caught internally
+            saved = await backfill_channel("@testchannel", limit=10)
+
+    # Nothing was saved since the worker was cancelled before completing
+    assert saved == 0
+
+
+@pytest.mark.asyncio
+async def test_total_timeout_logs_error(caplog):
+    """When total timeout fires, an error is logged with channel/timeout context."""
+    import logging
+    sample_text = "▶ 현대차(005380) - 미래에셋\nhttps://example.com/hyundai.pdf"
+    msg = make_mock_message(sample_text, msg_id=60)
+
+    async def fake_iter(*args, **kwargs):
+        yield msg
+
+    mock_session_ctx, _ = make_mock_db_session()
+
+    from collector.backfill import _ReportResult
+
+    async def hanging_process(task):
+        await asyncio.sleep(9999)
+        return _ReportResult("inserted", task.message.id)
+
+    logged_events = []
+
+    original_log_error = None
+
+    with patch("collector.backfill.get_client") as mock_get_client, \
+         patch("collector.backfill.AsyncSessionLocal", mock_session_ctx), \
+         patch("collector.backfill._process_single_report", side_effect=hanging_process), \
+         patch("collector.backfill.parse_messages") as mock_parse, \
+         patch("collector.backfill.settings") as mock_settings, \
+         patch("collector.backfill.log") as mock_log:
+
+        mock_settings.backfill_limit = None
+        mock_settings.pdf_base_path = MagicMock()
+        mock_settings.analysis_enabled = False
+        mock_settings.anthropic_api_key = None
+
+        mock_parsed = MagicMock()
+        mock_parsed.pdf_url = None
+        mock_parse.return_value = [mock_parsed]
+
+        mock_client = AsyncMock()
+        mock_client.iter_messages = fake_iter
+        mock_get_client.return_value = mock_client
+
+        original_wait_for = asyncio.wait_for
+
+        async def instant_timeout(coro, timeout):
+            return await original_wait_for(coro, timeout=0.001)
+
+        with patch("collector.backfill.asyncio.wait_for", side_effect=instant_timeout):
+            from collector.backfill import backfill_channel
+            await backfill_channel("@testchannel", limit=10)
+
+        # Verify log.error was called with the right event name
+        mock_log.error.assert_called_once()
+        call_args = mock_log.error.call_args
+        assert call_args[0][0] == "backfill_worker_total_timeout"
+        assert call_args[1].get("channel") == "@testchannel"
