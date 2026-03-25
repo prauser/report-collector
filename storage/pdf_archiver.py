@@ -24,6 +24,7 @@ log = structlog.get_logger(__name__)
 MAX_FILENAME_LEN = 80
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=60)
 REDIRECT_TIMEOUT = aiohttp.ClientTimeout(total=15)
+_TELEGRAM_DOWNLOAD_TIMEOUT = 120
 
 
 # ──────────────────────────────────────────────
@@ -353,13 +354,13 @@ async def download_telegram_document(client, message, report: Report) -> tuple[s
     try:
         await asyncio.wait_for(
             client.download_media(message, file=str(abs_path)),
-            timeout=120,
+            timeout=_TELEGRAM_DOWNLOAD_TIMEOUT,
         )
         size_kb = abs_path.stat().st_size // 1024
         log.info("telegram_pdf_downloaded", path=str(rel_path), size_kb=size_kb)
         return str(rel_path), size_kb
     except asyncio.TimeoutError:
-        log.warning("telegram_download_timeout", report_id=report.id, timeout=120)
+        log.warning("telegram_download_timeout", report_id=report.id, timeout=_TELEGRAM_DOWNLOAD_TIMEOUT)
         abs_path.unlink(missing_ok=True)
         return None, None
     except Exception as e:

@@ -38,6 +38,22 @@ _DIGITIZE_PROMPT = """\
 # 동시 호출 제한
 _SEMAPHORE = asyncio.Semaphore(5)
 
+# Backoff durations for retryable Gemini errors
+_RATE_LIMIT_BACKOFF = 60.0
+_SERVER_ERROR_BACKOFF = 10.0
+
+# Module-level lazy Gemini client (created once, reused across calls)
+_gemini_client = None
+
+
+def _get_gemini_client():
+    """Return the module-level Gemini client, creating it on first call."""
+    global _gemini_client
+    if _gemini_client is None:
+        from google import genai
+        _gemini_client = genai.Client(api_key=settings.gemini_api_key)
+    return _gemini_client
+
 
 @dataclass
 class DigitizeResult:
@@ -55,14 +71,13 @@ _GEMINI_TIMEOUT = 90  # 초
 
 async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]:
     """단일 이미지를 Gemini로 수치화. 타임아웃 적용."""
-    from google import genai
     from google.genai.errors import ClientError as GeminiClientError
 
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = _get_gemini_client()
     b64_data = base64.b64encode(image.image_bytes).decode()
 
     # Up to 2 attempts; on rate limit, release the semaphore BEFORE backoff sleep
-    # so other callers are not blocked during the 60-second wait.
+    # so other callers are not blocked during the wait.
     last_exc: Exception | None = None
     response = None
     try:
@@ -71,23 +86,21 @@ async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]
             await _SEMAPHORE.acquire()
             try:
                 response = await asyncio.wait_for(
-                    asyncio.shield(
-                        client.aio.models.generate_content(
-                            model=settings.gemini_model,
-                            contents=[
-                                {
-                                    "parts": [
-                                        {"text": _DIGITIZE_PROMPT},
-                                        {
-                                            "inline_data": {
-                                                "mime_type": "image/png",
-                                                "data": b64_data,
-                                            }
-                                        },
-                                    ]
-                                }
-                            ],
-                        )
+                    client.aio.models.generate_content(
+                        model=settings.gemini_model,
+                        contents=[
+                            {
+                                "parts": [
+                                    {"text": _DIGITIZE_PROMPT},
+                                    {
+                                        "inline_data": {
+                                            "mime_type": "image/png",
+                                            "data": b64_data,
+                                        }
+                                    },
+                                ]
+                            }
+                        ],
                     ),
                     timeout=_GEMINI_TIMEOUT,
                 )
@@ -98,18 +111,20 @@ async def _digitize_single(image: ExtractedImage) -> tuple[str | None, int, int]
                 last_exc = e
             finally:
                 _SEMAPHORE.release()
-            # Backoff happens OUTSIDE semaphore so other callers are not blocked
-            error_code = getattr(last_exc, "code", None)
-            log.warning(
-                "digitize_retryable",
-                page=image.page_num,
-                source=image.source,
-                attempt=attempt + 1,
-                code=error_code,
-                error=str(last_exc),
-            )
-            backoff = 60.0 if error_code == 429 else 10.0
-            await _gemini_chart_gate.trigger_backoff(backoff)
+            # Backoff happens OUTSIDE semaphore so other callers are not blocked.
+            # Only trigger backoff if there is another attempt coming (attempt 0 of 2).
+            if attempt < 1:
+                error_code = getattr(last_exc, "code", None)
+                log.warning(
+                    "digitize_retryable",
+                    page=image.page_num,
+                    source=image.source,
+                    attempt=attempt + 1,
+                    code=error_code,
+                    error=str(last_exc),
+                )
+                backoff = _RATE_LIMIT_BACKOFF if error_code == 429 else _SERVER_ERROR_BACKOFF
+                await _gemini_chart_gate.trigger_backoff(backoff)
         else:
             raise last_exc  # both attempts exhausted
     except asyncio.TimeoutError:

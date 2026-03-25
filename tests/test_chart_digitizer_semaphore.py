@@ -1,11 +1,14 @@
-"""Tests for the semaphore deadlock fix in chart_digitizer._digitize_single.
+"""Tests for chart_digitizer._digitize_single correctness.
 
-Verifies that:
-1. The semaphore is released BEFORE the 60-second backoff sleep on 429 errors.
-2. asyncio.shield() is used around the Gemini generate_content call.
+Verifies:
+1. The semaphore is released BEFORE the backoff sleep on 429/503 errors.
+2. asyncio.shield() is NOT used (removed to prevent leaked HTTP connections on timeout).
 3. On TimeoutError, semaphore is released and (None, 0, 0) is returned.
 4. Non-429 GeminiClientError releases semaphore and returns (None, 0, 0).
 5. Concurrent callers are not blocked during backoff (semaphore slot is free).
+6. trigger_backoff is NOT called after the final (last) failed attempt.
+7. Module-level constants _RATE_LIMIT_BACKOFF and _SERVER_ERROR_BACKOFF exist.
+8. Module-level lazy client _get_gemini_client() caches the client.
 """
 from __future__ import annotations
 
@@ -36,6 +39,18 @@ def _make_gemini_rate_limit_error():
     err.status = "RESOURCE_EXHAUSTED"
     err.response = None
     Exception.__init__(err, "429 quota exceeded")
+    return err
+
+
+def _make_gemini_503_error():
+    """Create a google.genai ClientError that looks like a 503."""
+    from google.genai.errors import ClientError
+    err = ClientError.__new__(ClientError)
+    err.code = 503
+    err.message = "service unavailable"
+    err.status = "UNAVAILABLE"
+    err.response = None
+    Exception.__init__(err, "503 service unavailable")
     return err
 
 
@@ -78,6 +93,7 @@ class TestSemaphoreReleasedBeforeBackoff:
 
             with patch.object(mod._gemini_chart_gate, "trigger_backoff", side_effect=fake_backoff), \
                  patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -90,8 +106,8 @@ class TestSemaphoreReleasedBeforeBackoff:
 
                 text, in_tok, out_tok = await mod._digitize_single(image)
 
-            # trigger_backoff should have been called (at least once)
-            assert len(semaphore_value_during_backoff) >= 1
+            # trigger_backoff should have been called exactly once (only for attempt 0)
+            assert len(semaphore_value_during_backoff) == 1
             # When trigger_backoff ran, the semaphore must have been released
             # (value > 0 means slot is available, i.e. NOT held)
             assert all(v > 0 for v in semaphore_value_during_backoff), (
@@ -121,6 +137,7 @@ class TestSemaphoreReleasedBeforeBackoff:
             # fast sleep so we can inspect state during it.
             with patch("parser.rate_limit.asyncio.sleep", side_effect=fake_sleep), \
                  patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -133,7 +150,7 @@ class TestSemaphoreReleasedBeforeBackoff:
 
                 text, in_tok, out_tok = await mod._digitize_single(image)
 
-            # asyncio.sleep was called (inside trigger_backoff)
+            # asyncio.sleep was called (inside trigger_backoff), once for attempt 0
             assert len(semaphore_during_sleep) >= 1
             # Semaphore must be available (not held) during sleep
             assert all(v > 0 for v in semaphore_during_sleep), (
@@ -184,6 +201,7 @@ class TestSemaphoreReleasedBeforeBackoff:
 
             with patch.object(mod._gemini_chart_gate, "trigger_backoff", new_callable=AsyncMock), \
                  patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -208,33 +226,31 @@ class TestSemaphoreReleasedBeforeBackoff:
         run(_test())
 
 
-class TestAsyncioShieldUsed:
-    """asyncio.shield() must wrap the Gemini generate_content call."""
+class TestNoAsyncioShield:
+    """asyncio.shield() must NOT be present — it leaks background HTTP connections on timeout."""
 
-    def test_asyncio_shield_used_in_source(self):
-        """Source code of _digitize_single must use asyncio.shield."""
+    def test_asyncio_shield_not_used_in_source(self):
+        """Source code of _digitize_single must NOT use asyncio.shield."""
         import parser.chart_digitizer as mod
         source = inspect.getsource(mod._digitize_single)
-        assert "asyncio.shield(" in source, (
-            "_digitize_single must use asyncio.shield() around generate_content"
+        assert "asyncio.shield(" not in source, (
+            "_digitize_single must not use asyncio.shield() — it leaks connections on timeout"
         )
 
-    def test_timeout_does_not_cancel_underlying_request(self):
-        """On TimeoutError, the shielded request continues; (None, 0, 0) returned.
-
-        asyncio.shield() ensures the underlying coroutine is NOT cancelled when
-        wait_for times out. We verify that (None, 0, 0) is returned on timeout.
-        The slow_generate coroutine is made to complete shortly after the timeout
-        so the background task does not orphan the event loop.
-        """
+    def test_timeout_cancels_underlying_request(self):
+        """On TimeoutError, wait_for properly cancels the request; (None, 0, 0) returned."""
         import parser.chart_digitizer as mod
 
         async def _test():
-            # The generate_content coroutine sleeps briefly then returns;
-            # wait_for will time out before it finishes (timeout=0.01s < sleep=0.1s)
+            cancelled = []
+
             async def slow_generate(*args, **kwargs):
-                await asyncio.sleep(0.1)
-                return MagicMock()
+                try:
+                    await asyncio.sleep(10)
+                    return MagicMock()
+                except asyncio.CancelledError:
+                    cancelled.append(True)
+                    raise
 
             image = MagicMock()
             image.image_bytes = b"fake"
@@ -243,6 +259,7 @@ class TestAsyncioShieldUsed:
 
             with patch("parser.chart_digitizer._GEMINI_TIMEOUT", 0.01), \
                  patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -253,12 +270,13 @@ class TestAsyncioShieldUsed:
 
                 text, in_tok, out_tok = await mod._digitize_single(image)
 
-            # Let the shielded background task finish so the event loop stays clean
-            await asyncio.sleep(0.15)
-
             assert text is None
             assert in_tok == 0
             assert out_tok == 0
+            # Without asyncio.shield, the underlying coroutine gets cancelled
+            assert len(cancelled) == 1, (
+                "Without asyncio.shield, the underlying request should be cancelled on timeout"
+            )
 
         run(_test())
 
@@ -268,7 +286,7 @@ class TestAsyncioShieldUsed:
 
         async def _test():
             async def slow_generate(*args, **kwargs):
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(10)
                 return MagicMock()
 
             image = MagicMock()
@@ -280,6 +298,7 @@ class TestAsyncioShieldUsed:
 
             with patch("parser.chart_digitizer._GEMINI_TIMEOUT", 0.01), \
                  patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -289,9 +308,6 @@ class TestAsyncioShieldUsed:
                 mock_genai_client.return_value = mock_client_instance
 
                 await mod._digitize_single(image)
-
-            # Let the shielded background task finish so the event loop stays clean
-            await asyncio.sleep(0.15)
 
             # Semaphore must be restored to initial value
             assert mod._SEMAPHORE._value == initial_semaphore_value, (
@@ -319,6 +335,7 @@ class TestSemaphoreReleasedOnAllErrorPaths:
             initial_semaphore_value = mod._SEMAPHORE._value
 
             with patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -353,6 +370,7 @@ class TestSemaphoreReleasedOnAllErrorPaths:
             initial_semaphore_value = mod._SEMAPHORE._value
 
             with patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -393,6 +411,7 @@ class TestSemaphoreReleasedOnAllErrorPaths:
             initial_semaphore_value = mod._SEMAPHORE._value
 
             with patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -452,6 +471,7 @@ class TestGateWaitCalledPerAttempt:
             with patch.object(mod._gemini_chart_gate, "wait", side_effect=tracking_wait), \
                  patch.object(mod._gemini_chart_gate, "trigger_backoff", new_callable=AsyncMock), \
                  patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -467,5 +487,291 @@ class TestGateWaitCalledPerAttempt:
                 f"gate.wait() should be called once per attempt; called {len(wait_count)} times"
             )
             assert text == "| x | y |"
+
+        run(_test())
+
+
+class TestNoBackoffAfterLastAttempt:
+    """trigger_backoff must NOT be called after the final failed attempt."""
+
+    def test_trigger_backoff_not_called_on_last_attempt_429(self):
+        """When both attempts fail with 429, trigger_backoff is called only once (attempt 0)."""
+        import parser.chart_digitizer as mod
+
+        async def _test():
+            rate_limit_err = _make_gemini_rate_limit_error()
+            backoff_calls = []
+
+            async def record_backoff(retry_after=60.0):
+                backoff_calls.append(retry_after)
+
+            image = MagicMock()
+            image.image_bytes = b"fake"
+            image.page_num = 0
+            image.source = "test"
+
+            with patch.object(mod._gemini_chart_gate, "trigger_backoff", side_effect=record_backoff), \
+                 patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
+                 patch("google.genai.Client") as mock_genai_client:
+                s.gemini_api_key = "fake-key"
+                s.gemini_model = "gemini-test"
+
+                mock_client_instance = MagicMock()
+                mock_client_instance.aio.models.generate_content = AsyncMock(
+                    side_effect=rate_limit_err
+                )
+                mock_genai_client.return_value = mock_client_instance
+
+                text, in_tok, out_tok = await mod._digitize_single(image)
+
+            # Both attempts exhausted → only attempt 0 triggers backoff, attempt 1 does not
+            assert len(backoff_calls) == 1, (
+                f"trigger_backoff should be called once (only for attempt 0), "
+                f"but was called {len(backoff_calls)} times"
+            )
+            assert text is None
+
+        run(_test())
+
+    def test_trigger_backoff_not_called_on_last_attempt_503(self):
+        """When both attempts fail with 503, trigger_backoff is called only once (attempt 0)."""
+        import parser.chart_digitizer as mod
+
+        async def _test():
+            server_err = _make_gemini_503_error()
+            backoff_calls = []
+
+            async def record_backoff(retry_after=10.0):
+                backoff_calls.append(retry_after)
+
+            image = MagicMock()
+            image.image_bytes = b"fake"
+            image.page_num = 0
+            image.source = "test"
+
+            with patch.object(mod._gemini_chart_gate, "trigger_backoff", side_effect=record_backoff), \
+                 patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
+                 patch("google.genai.Client") as mock_genai_client:
+                s.gemini_api_key = "fake-key"
+                s.gemini_model = "gemini-test"
+
+                mock_client_instance = MagicMock()
+                mock_client_instance.aio.models.generate_content = AsyncMock(
+                    side_effect=server_err
+                )
+                mock_genai_client.return_value = mock_client_instance
+
+                text, in_tok, out_tok = await mod._digitize_single(image)
+
+            assert len(backoff_calls) == 1, (
+                f"trigger_backoff should be called once (only for attempt 0), "
+                f"but was called {len(backoff_calls)} times"
+            )
+            assert text is None
+
+        run(_test())
+
+    def test_backoff_duration_429_uses_rate_limit_constant(self):
+        """429 error uses _RATE_LIMIT_BACKOFF constant for trigger_backoff."""
+        import parser.chart_digitizer as mod
+
+        async def _test():
+            rate_limit_err = _make_gemini_rate_limit_error()
+            backoff_calls = []
+
+            async def record_backoff(retry_after=60.0):
+                backoff_calls.append(retry_after)
+
+            image = MagicMock()
+            image.image_bytes = b"fake"
+            image.page_num = 0
+            image.source = "test"
+
+            mock_response = MagicMock()
+            mock_response.text = "| a | b |"
+            mock_response.usage_metadata = MagicMock(
+                prompt_token_count=2, candidates_token_count=2
+            )
+            call_count = 0
+
+            async def fail_then_succeed(*args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise rate_limit_err
+                return mock_response
+
+            with patch.object(mod._gemini_chart_gate, "trigger_backoff", side_effect=record_backoff), \
+                 patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
+                 patch("google.genai.Client") as mock_genai_client:
+                s.gemini_api_key = "fake-key"
+                s.gemini_model = "gemini-test"
+
+                mock_client_instance = MagicMock()
+                mock_client_instance.aio.models.generate_content = fail_then_succeed
+                mock_genai_client.return_value = mock_client_instance
+
+                await mod._digitize_single(image)
+
+            assert backoff_calls == [mod._RATE_LIMIT_BACKOFF], (
+                f"Expected backoff={mod._RATE_LIMIT_BACKOFF}, got {backoff_calls}"
+            )
+
+        run(_test())
+
+    def test_backoff_duration_503_uses_server_error_constant(self):
+        """503 error uses _SERVER_ERROR_BACKOFF constant for trigger_backoff."""
+        import parser.chart_digitizer as mod
+
+        async def _test():
+            server_err = _make_gemini_503_error()
+            backoff_calls = []
+
+            async def record_backoff(retry_after=10.0):
+                backoff_calls.append(retry_after)
+
+            image = MagicMock()
+            image.image_bytes = b"fake"
+            image.page_num = 0
+            image.source = "test"
+
+            mock_response = MagicMock()
+            mock_response.text = "| a | b |"
+            mock_response.usage_metadata = MagicMock(
+                prompt_token_count=2, candidates_token_count=2
+            )
+            call_count = 0
+
+            async def fail_then_succeed(*args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise server_err
+                return mock_response
+
+            with patch.object(mod._gemini_chart_gate, "trigger_backoff", side_effect=record_backoff), \
+                 patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
+                 patch("google.genai.Client") as mock_genai_client:
+                s.gemini_api_key = "fake-key"
+                s.gemini_model = "gemini-test"
+
+                mock_client_instance = MagicMock()
+                mock_client_instance.aio.models.generate_content = fail_then_succeed
+                mock_genai_client.return_value = mock_client_instance
+
+                await mod._digitize_single(image)
+
+            assert backoff_calls == [mod._SERVER_ERROR_BACKOFF], (
+                f"Expected backoff={mod._SERVER_ERROR_BACKOFF}, got {backoff_calls}"
+            )
+
+        run(_test())
+
+
+class TestMagicNumberConstants:
+    """Module-level constants replace magic numbers."""
+
+    def test_rate_limit_backoff_constant_exists(self):
+        """_RATE_LIMIT_BACKOFF constant is defined at module level."""
+        import parser.chart_digitizer as mod
+        assert hasattr(mod, "_RATE_LIMIT_BACKOFF"), "_RATE_LIMIT_BACKOFF constant must exist"
+        assert mod._RATE_LIMIT_BACKOFF == 60.0
+
+    def test_server_error_backoff_constant_exists(self):
+        """_SERVER_ERROR_BACKOFF constant is defined at module level."""
+        import parser.chart_digitizer as mod
+        assert hasattr(mod, "_SERVER_ERROR_BACKOFF"), "_SERVER_ERROR_BACKOFF constant must exist"
+        assert mod._SERVER_ERROR_BACKOFF == 10.0
+
+    def test_source_does_not_use_bare_magic_numbers_for_backoff(self):
+        """The literal values 60.0 and 10.0 should not appear as inline literals in _digitize_single."""
+        import parser.chart_digitizer as mod
+        source = inspect.getsource(mod._digitize_single)
+        assert "60.0" not in source, (
+            "60.0 should be extracted to _RATE_LIMIT_BACKOFF, not used inline"
+        )
+        assert "10.0" not in source, (
+            "10.0 should be extracted to _SERVER_ERROR_BACKOFF, not used inline"
+        )
+
+
+class TestLazyClientCaching:
+    """Module-level Gemini client is created once and reused."""
+
+    def test_get_gemini_client_function_exists(self):
+        """_get_gemini_client helper is defined at module level."""
+        import parser.chart_digitizer as mod
+        assert hasattr(mod, "_get_gemini_client"), "_get_gemini_client must exist"
+        assert callable(mod._get_gemini_client)
+
+    def test_client_created_only_once(self):
+        """Calling _get_gemini_client() twice returns the same object."""
+        import parser.chart_digitizer as mod
+
+        with patch("parser.chart_digitizer._gemini_client", None), \
+             patch("parser.chart_digitizer.settings") as s, \
+             patch("google.genai.Client") as mock_genai_client:
+            s.gemini_api_key = "fake-key"
+            mock_instance = MagicMock()
+            mock_genai_client.return_value = mock_instance
+
+            # Reset module-level client for isolation
+            original = mod._gemini_client
+            mod._gemini_client = None
+            try:
+                client1 = mod._get_gemini_client()
+                client2 = mod._get_gemini_client()
+            finally:
+                mod._gemini_client = original
+
+        assert client1 is client2, "Client should be cached and reused across calls"
+        assert mock_genai_client.call_count == 1, (
+            f"genai.Client() should be called only once, was called {mock_genai_client.call_count} times"
+        )
+
+    def test_digitize_single_uses_cached_client(self):
+        """_digitize_single does not create a new Client per call."""
+        import parser.chart_digitizer as mod
+
+        async def _test():
+            mock_response = MagicMock()
+            mock_response.text = "| x |"
+            mock_response.usage_metadata = MagicMock(
+                prompt_token_count=1, candidates_token_count=1
+            )
+
+            image = MagicMock()
+            image.image_bytes = b"fake"
+            image.page_num = 0
+            image.source = "test"
+
+            with patch("parser.chart_digitizer.settings") as s, \
+                 patch("parser.chart_digitizer._gemini_client", None), \
+                 patch("google.genai.Client") as mock_genai_client:
+                s.gemini_api_key = "fake-key"
+                s.gemini_model = "gemini-test"
+
+                mock_client_instance = MagicMock()
+                mock_client_instance.aio.models.generate_content = AsyncMock(
+                    return_value=mock_response
+                )
+                mock_genai_client.return_value = mock_client_instance
+
+                original = mod._gemini_client
+                mod._gemini_client = None
+                try:
+                    await mod._digitize_single(image)
+                    await mod._digitize_single(image)
+                finally:
+                    mod._gemini_client = original
+
+            # Even with two calls, genai.Client() constructed only once
+            assert mock_genai_client.call_count == 1, (
+                "genai.Client() should be constructed once and reused"
+            )
 
         run(_test())

@@ -213,30 +213,43 @@ async def main(args: argparse.Namespace) -> None:
     # Phase 1: 개별 분석 (키데이터 + 마크다운 + 이미지 + 차트)
     concurrency = args.concurrency
     print(f"\n>>> Phase 1: PDF 분석 ({len(reports)}건, 동시 {concurrency}건)...")
-    results = []
-    sem = asyncio.Semaphore(concurrency)
-    counter = {"done": 0}
+    results: list[dict] = []
+    done = 0
 
-    async def _run(report):
-        async with sem:
+    queue: asyncio.Queue = asyncio.Queue()
+    for report in reports:
+        queue.put_nowait(report)
+
+    async def _worker():
+        nonlocal done
+        while True:
+            try:
+                report = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
             try:
                 r = await asyncio.wait_for(process_single(report), timeout=_REPORT_TIMEOUT)
             except asyncio.TimeoutError:
                 log.warning("analysis_timeout", report_id=report.id, timeout=_REPORT_TIMEOUT)
-                return {"report_id": report.id, "status": "timeout"}
+                r = {"report_id": report.id, "status": "timeout"}
             except Exception as e:
                 log.error("analysis_error", report_id=report.id, error=str(e))
-                return {"report_id": report.id, "status": f"error: {e}"}
-            counter["done"] += 1
+                r = {"report_id": report.id, "status": f"error: {e}"}
+            finally:
+                queue.task_done()
+            done += 1
             status = r["status"]
             steps = r.get("steps", {})
             has_l2 = "layer2_input" in r
-            log.info("analyzed", progress=f"{counter['done']}/{len(reports)}", report_id=report.id,
+            log.info("analyzed", progress=f"{done}/{len(reports)}", report_id=report.id,
                      status=status, has_layer2=has_l2,
                      md=steps.get("markdown", "-"), charts=steps.get("charts", "-"))
-            return r
+            results.append(r)
 
-    results = await asyncio.gather(*[_run(r) for r in reports])
+    num_workers = min(concurrency, len(reports))
+    if num_workers > 0:
+        workers = [asyncio.create_task(_worker()) for _ in range(num_workers)]
+        await asyncio.gather(*workers)
 
     # Phase 2: Layer2 Batch API
     layer2_inputs = {}

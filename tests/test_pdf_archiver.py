@@ -184,6 +184,55 @@ class TestIsRetryableFailure:
         assert is_retryable_failure("http_500") is True
 
 
+class TestTelegramDownloadTimeoutConstant:
+    """_TELEGRAM_DOWNLOAD_TIMEOUT constant is defined and used correctly."""
+
+    def test_constant_value(self):
+        from storage.pdf_archiver import _TELEGRAM_DOWNLOAD_TIMEOUT
+        assert _TELEGRAM_DOWNLOAD_TIMEOUT == 120
+
+    @pytest.mark.asyncio
+    async def test_wait_for_receives_constant_as_timeout(self, tmp_path):
+        """asyncio.wait_for is called with _TELEGRAM_DOWNLOAD_TIMEOUT, not a hard-coded literal."""
+        from storage.pdf_archiver import download_telegram_document, _TELEGRAM_DOWNLOAD_TIMEOUT
+
+        report = make_report()
+        mock_client = MagicMock()
+        mock_message = MagicMock()
+
+        captured_timeout = {}
+
+        async def fake_wait_for(coro, timeout=None):
+            captured_timeout["value"] = timeout
+            # cancel the coroutine to avoid resource warnings
+            coro.close()
+            raise asyncio.TimeoutError
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            with patch("storage.pdf_archiver.asyncio.wait_for", side_effect=fake_wait_for):
+                await download_telegram_document(mock_client, mock_message, report)
+
+        assert captured_timeout["value"] == _TELEGRAM_DOWNLOAD_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_timeout_warning_uses_constant(self, tmp_path):
+        """log.warning timeout= kwarg equals _TELEGRAM_DOWNLOAD_TIMEOUT."""
+        from storage.pdf_archiver import download_telegram_document, _TELEGRAM_DOWNLOAD_TIMEOUT
+
+        report = make_report()
+        mock_client = MagicMock()
+        mock_message = MagicMock()
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                with patch("storage.pdf_archiver.log") as mock_log:
+                    await download_telegram_document(mock_client, mock_message, report)
+                    _, kwargs = mock_log.warning.call_args
+                    assert kwargs["timeout"] == _TELEGRAM_DOWNLOAD_TIMEOUT
+
+
 class TestDownloadTelegramDocument:
 
     @pytest.mark.asyncio
