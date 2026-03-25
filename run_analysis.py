@@ -48,6 +48,7 @@ from collector.listener import _apply_layer2_meta
 log = structlog.get_logger(__name__)
 
 _REPORT_TIMEOUT = 300  # 건당 최대 5분
+_CONCURRENCY = 4  # Phase 1 동시 처리 건수
 
 
 async def _get_unanalyzed_reports(limit: int) -> list[ReportModel]:
@@ -210,24 +211,45 @@ async def main(args: argparse.Namespace) -> None:
         return
 
     # Phase 1: 개별 분석 (키데이터 + 마크다운 + 이미지 + 차트)
-    print(f"\n>>> Phase 1: PDF 분석 ({len(reports)}건)...")
-    results = []
-    for i, report in enumerate(reports, 1):
-        try:
-            r = await asyncio.wait_for(process_single(report), timeout=_REPORT_TIMEOUT)
-            results.append(r)
+    concurrency = args.concurrency
+    print(f"\n>>> Phase 1: PDF 분석 ({len(reports)}건, 동시 {concurrency}건)...")
+    results: list[dict] = []
+    done = 0
+
+    queue: asyncio.Queue = asyncio.Queue()
+    for report in reports:
+        queue.put_nowait(report)
+
+    async def _worker():
+        nonlocal done
+        while True:
+            try:
+                report = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                r = await asyncio.wait_for(process_single(report), timeout=_REPORT_TIMEOUT)
+            except asyncio.TimeoutError:
+                log.warning("analysis_timeout", report_id=report.id, timeout=_REPORT_TIMEOUT)
+                r = {"report_id": report.id, "status": "timeout"}
+            except Exception as e:
+                log.error("analysis_error", report_id=report.id, error=str(e))
+                r = {"report_id": report.id, "status": f"error: {e}"}
+            finally:
+                queue.task_done()
+            done += 1
             status = r["status"]
             steps = r.get("steps", {})
             has_l2 = "layer2_input" in r
-            log.info("analyzed", progress=f"{i}/{len(reports)}", report_id=report.id,
+            log.info("analyzed", progress=f"{done}/{len(reports)}", report_id=report.id,
                      status=status, has_layer2=has_l2,
                      md=steps.get("markdown", "-"), charts=steps.get("charts", "-"))
-        except asyncio.TimeoutError:
-            log.warning("analysis_timeout", report_id=report.id, timeout=_REPORT_TIMEOUT)
-            results.append({"report_id": report.id, "status": "timeout"})
-        except Exception as e:
-            log.error("analysis_error", report_id=report.id, error=str(e))
-            results.append({"report_id": report.id, "status": f"error: {e}"})
+            results.append(r)
+
+    num_workers = min(concurrency, len(reports))
+    if num_workers > 0:
+        workers = [asyncio.create_task(_worker()) for _ in range(num_workers)]
+        await asyncio.gather(*workers)
 
     # Phase 2: Layer2 Batch API
     layer2_inputs = {}
@@ -337,6 +359,7 @@ async def main(args: argparse.Namespace) -> None:
 def cli():
     parser = argparse.ArgumentParser(description="PDF 분석 (수집과 독립 실행)")
     parser.add_argument("--limit", type=int, default=0, help="처리 건수 제한 (0=전체)")
+    parser.add_argument("--concurrency", type=int, default=_CONCURRENCY, help=f"Phase 1 동시 처리 건수 (기본값: {_CONCURRENCY})")
     parser.add_argument("--dry-run", action="store_true", help="대상만 확인")
     return parser.parse_args()
 

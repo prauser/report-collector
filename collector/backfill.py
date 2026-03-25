@@ -205,13 +205,15 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
                     await save_markdown(session, report.id, markdown_text, converter_name)
 
                 # ② 차트/테이블 이미지 분리 → ④ Gemini 수치화
-                images = await extract_images_from_pdf(abs_path)
-                if images:
-                    dig_result = await digitize_charts(
-                        images, report_id=report.id, channel=channel_username,
-                    )
-                    if dig_result.texts:
-                        chart_texts = dig_result.texts
+                # Gemini 키가 없으면 이미지 추출도 스킵 (수치화 불가 시 추출 자체가 낭비)
+                if settings.gemini_api_key:
+                    images = await extract_images_from_pdf(abs_path)
+                    if images:
+                        dig_result = await digitize_charts(
+                            images, report_id=report.id, channel=channel_username,
+                        )
+                        if dig_result.texts:
+                            chart_texts = dig_result.texts
 
                 # key_data + markdown + charts 완료 → analysis_pending
                 await update_pipeline_status(session, report.id, "analysis_pending")
@@ -346,7 +348,16 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
         num_workers = min(_BACKFILL_CONCURRENCY, len(tasks))
         if num_workers > 0:
             workers = [asyncio.create_task(_worker()) for _ in range(num_workers)]
-            await asyncio.gather(*workers)
+            total_timeout = max(600, _TASK_TIMEOUT * len(tasks) // num_workers + 120)
+            try:
+                await asyncio.wait_for(asyncio.gather(*workers), timeout=total_timeout)
+            except asyncio.TimeoutError:
+                log.error("backfill_worker_total_timeout",
+                          channel=channel_username, timeout=total_timeout,
+                          tasks=len(tasks), num_workers=num_workers)
+                for w in workers:
+                    w.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
 
         # 결과 집계
         for r in results:

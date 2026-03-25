@@ -1,4 +1,5 @@
 """PDF 아카이빙 테스트."""
+import asyncio
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -181,3 +182,161 @@ class TestIsRetryableFailure:
         from storage.pdf_archiver import is_retryable_failure
         # 5xx errors are transient — should be retryable
         assert is_retryable_failure("http_500") is True
+
+
+class TestTelegramDownloadTimeoutConstant:
+    """_TELEGRAM_DOWNLOAD_TIMEOUT constant is defined and used correctly."""
+
+    def test_constant_value(self):
+        from storage.pdf_archiver import _TELEGRAM_DOWNLOAD_TIMEOUT
+        assert _TELEGRAM_DOWNLOAD_TIMEOUT == 120
+
+    @pytest.mark.asyncio
+    async def test_wait_for_receives_constant_as_timeout(self, tmp_path):
+        """asyncio.wait_for is called with _TELEGRAM_DOWNLOAD_TIMEOUT, not a hard-coded literal."""
+        from storage.pdf_archiver import download_telegram_document, _TELEGRAM_DOWNLOAD_TIMEOUT
+
+        report = make_report()
+        mock_client = MagicMock()
+        mock_message = MagicMock()
+
+        captured_timeout = {}
+
+        async def fake_wait_for(coro, timeout=None):
+            captured_timeout["value"] = timeout
+            # cancel the coroutine to avoid resource warnings
+            coro.close()
+            raise asyncio.TimeoutError
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            with patch("storage.pdf_archiver.asyncio.wait_for", side_effect=fake_wait_for):
+                await download_telegram_document(mock_client, mock_message, report)
+
+        assert captured_timeout["value"] == _TELEGRAM_DOWNLOAD_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_timeout_warning_uses_constant(self, tmp_path):
+        """log.warning timeout= kwarg equals _TELEGRAM_DOWNLOAD_TIMEOUT."""
+        from storage.pdf_archiver import download_telegram_document, _TELEGRAM_DOWNLOAD_TIMEOUT
+
+        report = make_report()
+        mock_client = MagicMock()
+        mock_message = MagicMock()
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                with patch("storage.pdf_archiver.log") as mock_log:
+                    await download_telegram_document(mock_client, mock_message, report)
+                    _, kwargs = mock_log.warning.call_args
+                    assert kwargs["timeout"] == _TELEGRAM_DOWNLOAD_TIMEOUT
+
+
+class TestDownloadTelegramDocument:
+
+    @pytest.mark.asyncio
+    async def test_successful_download(self, tmp_path):
+        from storage.pdf_archiver import download_telegram_document
+
+        report = make_report()
+        fake_data = b"%PDF-1.4 fake"
+
+        async def fake_download_media(message, file=None):
+            Path(file).write_bytes(fake_data)
+
+        mock_client = MagicMock()
+        mock_client.download_media = fake_download_media
+        mock_message = MagicMock()
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            rel_path, size_kb = await download_telegram_document(mock_client, mock_message, report)
+
+        assert rel_path is not None
+        assert size_kb is not None
+        assert (tmp_path / rel_path).exists()
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_none_and_cleans_up(self, tmp_path):
+        from storage.pdf_archiver import download_telegram_document
+
+        report = make_report()
+
+        async def slow_download_media(message, file=None):
+            # Write a partial file then time out
+            Path(file).write_bytes(b"partial")
+            await asyncio.sleep(9999)
+
+        mock_client = MagicMock()
+        mock_client.download_media = slow_download_media
+        mock_message = MagicMock()
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                rel_path, size_kb = await download_telegram_document(
+                    mock_client, mock_message, report
+                )
+
+        assert rel_path is None
+        assert size_kb is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_logs_warning(self, tmp_path):
+        from storage.pdf_archiver import download_telegram_document
+
+        report = make_report()
+        mock_client = MagicMock()
+        mock_message = MagicMock()
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                with patch("storage.pdf_archiver.log") as mock_log:
+                    await download_telegram_document(mock_client, mock_message, report)
+                    mock_log.warning.assert_called_once_with(
+                        "telegram_download_timeout",
+                        report_id=report.id,
+                        timeout=120,
+                    )
+
+    @pytest.mark.asyncio
+    async def test_timeout_removes_partial_file(self, tmp_path):
+        from storage.pdf_archiver import download_telegram_document
+        from storage.pdf_archiver import build_pdf_path
+
+        report = make_report()
+        mock_client = MagicMock()
+        mock_message = MagicMock()
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            # Pre-create a partial file at the expected path
+            rel_path = build_pdf_path(report)
+            abs_path = tmp_path / rel_path
+            abs_path.parent.mkdir(parents=True, exist_ok=True)
+            abs_path.write_bytes(b"partial garbage")
+
+            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                await download_telegram_document(mock_client, mock_message, report)
+
+            assert not abs_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_other_exception_returns_none(self, tmp_path):
+        from storage.pdf_archiver import download_telegram_document
+
+        report = make_report()
+        mock_client = MagicMock()
+        mock_message = MagicMock()
+
+        with patch("storage.pdf_archiver.settings") as mock_settings:
+            mock_settings.pdf_base_path = tmp_path
+            with patch("asyncio.wait_for", side_effect=RuntimeError("connection lost")):
+                rel_path, size_kb = await download_telegram_document(
+                    mock_client, mock_message, report
+                )
+
+        assert rel_path is None
+        assert size_kb is None

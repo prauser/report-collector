@@ -469,23 +469,22 @@ class TestChartDigitizerGateIntegration:
             image.page_num = 0
             image.source = "test"
 
+            mock_client_instance = MagicMock()
+            mock_client_instance.aio.models.generate_content = AsyncMock(
+                side_effect=rate_limit_err
+            )
+
             with patch.object(mod._gemini_chart_gate, "trigger_backoff", side_effect=fake_backoff), \
                  patch("parser.chart_digitizer.settings") as s, \
-                 patch("google.genai.Client") as mock_genai_client:
+                 patch("parser.chart_digitizer._get_gemini_client", return_value=mock_client_instance):
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
 
-                mock_client_instance = MagicMock()
-                mock_client_instance.aio.models.generate_content = AsyncMock(
-                    side_effect=rate_limit_err
-                )
-                mock_genai_client.return_value = mock_client_instance
-
                 text, in_tok, out_tok = await mod._digitize_single(image)
 
-            # 2 attempts → backoff triggered twice (once per failed attempt)
-            assert len(backoff_calls) == 2
-            assert all(v == 60.0 for v in backoff_calls)
+            # 2 attempts → backoff only on first failure (second is final, no backoff)
+            assert len(backoff_calls) == 1
+            assert backoff_calls[0] == 60.0
             assert text is None
             assert in_tok == 0
             assert out_tok == 0
@@ -523,15 +522,14 @@ class TestChartDigitizerGateIntegration:
             image.page_num = 1
             image.source = "test"
 
+            mock_client_instance = MagicMock()
+            mock_client_instance.aio.models.generate_content = fail_then_succeed
+
             with patch.object(mod._gemini_chart_gate, "trigger_backoff", side_effect=fake_backoff), \
                  patch("parser.chart_digitizer.settings") as s, \
-                 patch("google.genai.Client") as mock_genai_client:
+                 patch("parser.chart_digitizer._get_gemini_client", return_value=mock_client_instance):
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
-
-                mock_client_instance = MagicMock()
-                mock_client_instance.aio.models.generate_content = fail_then_succeed
-                mock_genai_client.return_value = mock_client_instance
 
                 text, in_tok, out_tok = await mod._digitize_single(image)
 

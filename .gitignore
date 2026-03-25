@@ -42,5 +42,6 @@ web/.env.local
 # 임시 파일
 HANDOFF.md
 TASK_RESULT.md
+fix3_result.md
 bash.exe.stackdump
 ~/
