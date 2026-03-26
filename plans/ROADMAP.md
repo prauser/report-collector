@@ -1,7 +1,7 @@
 # Report Collector — 통합 로드맵
 
 > 단일 참조 문서. 모든 Phase 계획과 진행 상태는 이 파일에서 관리.
-> 마지막 갱신: 2026-03-26
+> 마지막 갱신: 2026-03-26 (Phase B 부분 완료)
 
 ## 인프라 구성
 
@@ -50,6 +50,16 @@ Vercel            → Next.js 웹
 - [x] Pipeline hang 버그 4건 수정 (chart_digitizer, pdf_archiver, telegram_client, backfill)
 - [x] Analysis Phase 1 병렬화 (Queue/Worker 패턴, --concurrency CLI)
 
+### Phase B 부분 — 종목/섹터 분석 (2026-03-26)
+- [x] 종목 분석 API (`GET /api/stocks`, `/api/stocks/{code}/history`)
+- [x] 섹터 분석 API (`GET /api/analysis/sectors`, `/api/analysis/sector/{name}`)
+- [x] Recharts 도입 (목표가 라인차트, 섹터 도넛차트, sentiment 바차트)
+- [x] `/analysis` 페이지 — 종목|섹터 탭, 종목 검색/목록
+- [x] `/analysis/stocks/[code]` — 종목 히스토리 (목표가 차트 + 의견 타임라인 + 리포트 목록)
+- [x] `/analysis/sector/[name]` — 섹터 내 종목 비교 (sentiment 바차트)
+- [x] 기존 테스트 스키마 drift 수정 + `formatPrice(0)` 버그 수정
+- [x] pandas_ta 설치 (WSL venv)
+
 ---
 
 ## 현재 파이프라인 상태 (2026-03-26 기준)
@@ -93,14 +103,17 @@ pdf_done                197    분석 대기 (run_analysis가 자동 포함)
 - [ ] extraction_quality 표시 + PDF 원문 링크
 
 **종목별 리포트 히스토리**
-- [ ] 같은 종목 리포트 시계열 목록
-- [ ] 투자의견/목표가 변화 추이 차트
+- [x] 같은 종목 리포트 시계열 목록
+- [x] 투자의견/목표가 변화 추이 차트
 - [ ] report_stock_mentions 기반 크로스 링크 (종목 리포트 ↔ 산업 리포트)
 
 **섹터/산업 분석 뷰**
 - [ ] 산업 리포트의 stock_implications 연결 표시
-- [ ] 섹터별 리포트 모아보기
+- [x] 섹터별 리포트 모아보기
 - [ ] masterplan 6장의 크로스 리포트 연결 구조(매크로→산업→종목) 시각화
+
+**데이터 품질**
+- [ ] stock_code 정규화 — report_stock_mentions pseudo-code 정리, reports.stock_code NULL 재추출, stock_codes 마스터 최신화
 
 ### Phase C — 매매 저널 완성
 
