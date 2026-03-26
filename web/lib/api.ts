@@ -365,6 +365,92 @@ async function patch<T>(path: string, body: Record<string, unknown>): Promise<T>
   return res.json();
 }
 
+// ---------------------------------------------------------------------------
+// Stock analysis types
+// ---------------------------------------------------------------------------
+
+export interface StockListItem {
+  stock_code: string;
+  stock_name: string | null;
+  report_count: number;
+  latest_report_date: string | null;
+  avg_sentiment: number | null;
+}
+
+export interface StockListResponse {
+  items: StockListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface StockHistoryItem {
+  report_id: number;
+  broker: string;
+  report_date: string;
+  title: string;
+  opinion: string | null;
+  target_price: number | null;
+  layer2_summary: string | null;
+  layer2_sentiment: number | null;
+}
+
+export interface StockHistoryResponse {
+  stock_code: string;
+  stock_name: string | null;
+  items: StockHistoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export type StockListParams = {
+  search?: string;
+  sort?: "report_count" | "latest_date";
+  limit?: number;
+  offset?: number;
+};
+
+export type StockHistoryParams = {
+  limit?: number;
+  offset?: number;
+};
+
+// ---------------------------------------------------------------------------
+// Sector analysis types
+// ---------------------------------------------------------------------------
+
+export interface SectorTopStock {
+  stock_code: string;
+  stock_name: string | null;
+  report_count: number;
+}
+
+export interface SectorListItem {
+  sector_name: string;
+  report_count: number;
+  avg_sentiment: number | null;
+  top_stocks: SectorTopStock[];
+}
+
+export interface SectorListResponse {
+  items: SectorListItem[];
+}
+
+export interface SectorStockItem {
+  stock_code: string;
+  stock_name: string | null;
+  report_count: number;
+  avg_sentiment: number | null;
+  latest_opinion: string | null;
+  latest_target_price: number | null;
+}
+
+export interface SectorStockResponse {
+  sector_name: string;
+  items: SectorStockItem[];
+}
+
 export const api = {
   agent: {
     getSessions: () =>
@@ -492,5 +578,16 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision }),
       }).then((r) => r.json()),
+  },
+  stocks: {
+    list: (params?: StockListParams) =>
+      clientFetch<StockListResponse>("/api/stocks", params as Record<string, unknown>),
+    history: (code: string, params?: StockHistoryParams) =>
+      clientFetch<StockHistoryResponse>(`/api/stocks/${code}/history`, params as Record<string, unknown>),
+  },
+  analysis: {
+    sectors: () => clientFetch<SectorListResponse>("/api/analysis/sectors"),
+    sector: (name: string) =>
+      clientFetch<SectorStockResponse>(`/api/analysis/sector/${encodeURIComponent(name)}`),
   },
 };

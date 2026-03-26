@@ -290,6 +290,7 @@ class TestSchemas:
             pdf_url=None, pdf_path=None, pdf_size_kb=None, page_count=None,
             earnings_quarter=None, est_revenue=None, est_op_profit=None, est_eps=None,
             raw_text=None,
+            source_message_id=None,
             layer2=None,
         )
         detail = ReportDetail(**data)
@@ -321,6 +322,7 @@ class TestSchemas:
             pdf_url=None, pdf_path=None, pdf_size_kb=None, page_count=None,
             earnings_quarter=None, est_revenue=None, est_op_profit=None, est_eps=None,
             raw_text=None,
+            source_message_id=None,
             layer2=layer2,
         )
         detail = ReportDetail(**data)

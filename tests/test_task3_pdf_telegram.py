@@ -282,6 +282,10 @@ class TestReportDetailSchema:
             ai_sentiment=None,
             collected_at=datetime(2026, 3, 20, 9, 0),
             source_channel="@testchannel",
+            display_title="삼성전자 목표가 상향",
+            layer2_summary=None,
+            layer2_sentiment=None,
+            layer2_category=None,
             ai_summary=None,
             ai_keywords=None,
             ai_processed_at=None,
@@ -295,6 +299,7 @@ class TestReportDetailSchema:
             est_eps=None,
             raw_text=None,
             source_message_id=12345,
+            layer2=None,
         )
         assert detail.source_message_id == 12345
 
@@ -322,6 +327,10 @@ class TestReportDetailSchema:
             ai_sentiment=None,
             collected_at=datetime(2026, 3, 20, 9, 0),
             source_channel="@kbchannel",
+            display_title="시장 분석",
+            layer2_summary=None,
+            layer2_sentiment=None,
+            layer2_category=None,
             ai_summary=None,
             ai_keywords=None,
             ai_processed_at=None,
@@ -335,6 +344,7 @@ class TestReportDetailSchema:
             est_eps=None,
             raw_text=None,
             source_message_id=None,
+            layer2=None,
         )
         assert detail.source_message_id is None
 
@@ -380,16 +390,27 @@ class TestGetReportEndpoint:
         r.source_message_id = source_message_id
         return r
 
+    def _make_execute_result(self, scalar_one_or_none_value=None, scalars_all_value=None):
+        """Return a mock result object for db.execute() calls."""
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=scalar_one_or_none_value)
+        scalars_result = MagicMock()
+        scalars_result.all = MagicMock(return_value=scalars_all_value or [])
+        result.scalars = MagicMock(return_value=scalars_result)
+        return result
+
     def test_get_report_includes_source_message_id(self):
         """GET /api/reports/{id} response includes source_message_id."""
         from api.main import app
         from api.deps import get_db
 
         mock_report = self._make_report_model(source_message_id=42000)
+        execute_result = self._make_execute_result(scalar_one_or_none_value=None)
 
         async def override_db():
             db = AsyncMock()
             db.get = AsyncMock(return_value=mock_report)
+            db.execute = AsyncMock(return_value=execute_result)
             yield db
 
         app.dependency_overrides[get_db] = override_db
@@ -409,10 +430,12 @@ class TestGetReportEndpoint:
         from api.deps import get_db
 
         mock_report = self._make_report_model(source_message_id=None)
+        execute_result = self._make_execute_result(scalar_one_or_none_value=None)
 
         async def override_db():
             db = AsyncMock()
             db.get = AsyncMock(return_value=mock_report)
+            db.execute = AsyncMock(return_value=execute_result)
             yield db
 
         app.dependency_overrides[get_db] = override_db
