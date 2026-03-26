@@ -295,7 +295,7 @@ class TestKeyDataExtractorGateIntegration:
                  patch("parser.key_data_extractor.settings") as s, \
                  patch("parser.key_data_extractor.record_llm_usage", new_callable=AsyncMock), \
                  patch("parser.key_data_extractor.calc_cost_usd", return_value=0), \
-                 patch("parser.key_data_extractor._get_first_page_text", return_value="page text"), \
+                 patch("parser.key_data_extractor._get_first_page_text_sync", return_value="page text"), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -347,7 +347,7 @@ class TestKeyDataExtractorGateIntegration:
                  patch("parser.key_data_extractor.settings") as s, \
                  patch("parser.key_data_extractor.record_llm_usage", new_callable=AsyncMock), \
                  patch("parser.key_data_extractor.calc_cost_usd", return_value=0), \
-                 patch("parser.key_data_extractor._get_first_page_text", return_value="page text"), \
+                 patch("parser.key_data_extractor._get_first_page_text_sync", return_value="page text"), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
@@ -380,7 +380,7 @@ class TestKeyDataExtractorGateIntegration:
 
             with patch.object(mod._gemini_keydata_gate, "trigger_backoff", side_effect=fake_backoff), \
                  patch("parser.key_data_extractor.settings") as s, \
-                 patch("parser.key_data_extractor._get_first_page_text", return_value="page text"), \
+                 patch("parser.key_data_extractor._get_first_page_text_sync", return_value="page text"), \
                  patch("google.genai.Client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"

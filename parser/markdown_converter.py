@@ -94,18 +94,34 @@ async def _convert_marker(pdf_path: Path) -> str | None:
     return await _convert_pymupdf4llm(pdf_path)
 
 
-async def _convert_fallback(pdf_path: Path) -> str | None:
-    """pypdf 기반 단순 텍스트 추출 (fallback)."""
-    try:
-        from pypdf import PdfReader
+_FALLBACK_TIMEOUT = 60  # pypdf fallback 최대 60초
 
-        reader = PdfReader(str(pdf_path))
-        parts = []
-        for page in reader.pages:
-            text = page.extract_text() or ""
-            parts.append(text)
-        full = "\n\n".join(parts)
-        return full if full.strip() else None
+
+def _pypdf_extract_sync(pdf_path: str) -> str | None:
+    """pypdf 동기 텍스트 추출."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(pdf_path)
+    parts = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        parts.append(text)
+    full = "\n\n".join(parts)
+    return full if full.strip() else None
+
+
+async def _convert_fallback(pdf_path: Path) -> str | None:
+    """pypdf 기반 단순 텍스트 추출 (fallback). 타임아웃 적용."""
+    import asyncio
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_pypdf_extract_sync, str(pdf_path)),
+            timeout=_FALLBACK_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning("fallback_convert_timeout", path=str(pdf_path), timeout=_FALLBACK_TIMEOUT)
+        return None
     except Exception as e:
         log.warning("fallback_convert_failed", path=str(pdf_path), error=str(e))
         return None

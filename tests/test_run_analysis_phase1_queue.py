@@ -11,8 +11,20 @@ Verifies:
 """
 import asyncio
 import argparse
+import contextlib
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+
+def _db_mocks():
+    """Return context managers that mock DB session + update_pipeline_status."""
+    mock_sess = AsyncMock()
+    mock_sess.__aenter__ = AsyncMock(return_value=mock_sess)
+    mock_sess.__aexit__ = AsyncMock(return_value=False)
+    return (
+        patch("run_analysis.update_pipeline_status", new_callable=AsyncMock),
+        patch("run_analysis.AsyncSessionLocal", return_value=mock_sess),
+    )
 
 
 def _make_args(concurrency: int = 2, limit: int = 0, dry_run: bool = False) -> argparse.Namespace:
@@ -60,9 +72,15 @@ async def _run_phase1(reports, process_single_side_effect, concurrency=2):
     # We do this by replacing `run_layer2_batch` and letting main() run to the
     # "no layer2_inputs" early-return or "no anthropic key" branch.
 
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
     with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get_reports), \
          patch("run_analysis.process_single", new_callable=AsyncMock,
                side_effect=process_single_side_effect), \
+         patch("run_analysis.update_pipeline_status", new_callable=AsyncMock), \
+         patch("run_analysis.AsyncSessionLocal", return_value=mock_session), \
          patch("run_analysis.settings") as mock_settings:
         # Disable Layer2 so main() exits right after Phase 1
         mock_settings.gemini_api_key = "fake"
@@ -215,9 +233,11 @@ class TestPhase1ResultShape:
         async def fake_get(_limit):
             return reports
 
+        db_patch1, db_patch2 = _db_mocks()
         with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
              patch("run_analysis.process_single", new_callable=AsyncMock,
                    side_effect=fake_process), \
+             db_patch1, db_patch2, \
              patch("run_analysis.settings") as ms, \
              patch("run_analysis.log") as mock_log:
             ms.gemini_api_key = "fake"
@@ -246,9 +266,11 @@ class TestPhase1ResultShape:
         async def fake_get(_limit):
             return reports
 
+        db_patch1, db_patch2 = _db_mocks()
         with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
              patch("run_analysis.process_single", new_callable=AsyncMock,
                    side_effect=fake_process), \
+             db_patch1, db_patch2, \
              patch("run_analysis.settings") as ms, \
              patch("run_analysis.log") as mock_log:
             ms.gemini_api_key = "fake"
@@ -290,9 +312,11 @@ class TestPhase1ProgressLogging:
             if event == "analyzed":
                 analyzed_calls.append(kwargs)
 
+        db_patch1, db_patch2 = _db_mocks()
         with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
              patch("run_analysis.process_single", new_callable=AsyncMock,
                    side_effect=fake_process), \
+             db_patch1, db_patch2, \
              patch("run_analysis.settings") as ms, \
              patch("run_analysis.log") as mock_log:
             ms.gemini_api_key = "fake"
@@ -326,9 +350,11 @@ class TestPhase1ProgressLogging:
             if event == "analyzed":
                 analyzed_calls.append(kwargs)
 
+        db_patch1, db_patch2 = _db_mocks()
         with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
              patch("run_analysis.process_single", new_callable=AsyncMock,
                    side_effect=fake_process), \
+             db_patch1, db_patch2, \
              patch("run_analysis.settings") as ms, \
              patch("run_analysis.log") as mock_log:
             ms.gemini_api_key = "fake"

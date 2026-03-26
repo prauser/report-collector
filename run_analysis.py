@@ -43,17 +43,20 @@ from parser.layer2_extractor import (
 )
 from storage.llm_usage_repo import record_llm_usage
 from storage.analysis_repo import save_analysis, log_analysis_failure
+from storage.report_repo import update_pipeline_status
 from collector.listener import _apply_layer2_meta
 
 log = structlog.get_logger(__name__)
 
-_REPORT_TIMEOUT = 300  # 건당 최대 5분
+_REPORT_TIMEOUT = 1800  # 건당 최대 30분 (각 단계에 자체 timeout 있음)
 _CONCURRENCY = 4  # Phase 1 동시 처리 건수
 
 
 async def _get_unanalyzed_reports(limit: int) -> list[ReportModel]:
-    """pdf_path 있고 report_analysis 없는 건 조회."""
+    """pdf_path 있고 report_analysis 없는 건 조회. pdf_done 이상만 대상."""
     from db.models import ReportAnalysis
+
+    _ANALYZABLE_STATUSES = ("pdf_done", "analysis_pending")
 
     async with AsyncSessionLocal() as session:
         analyzed_ids = select(ReportAnalysis.report_id).scalar_subquery()
@@ -61,6 +64,7 @@ async def _get_unanalyzed_reports(limit: int) -> list[ReportModel]:
             select(ReportModel).where(
                 ReportModel.pdf_path.isnot(None),
                 ReportModel.id.notin_(analyzed_ids),
+                ReportModel.pipeline_status.in_(_ANALYZABLE_STATUSES),
             )
             .order_by(ReportModel.report_date.desc())
             .limit(limit)
@@ -81,12 +85,12 @@ async def process_single(report: ReportModel) -> dict:
     channel = report.source_channel or ""
 
     # 분석 시작 전 상태 기록
-    from storage.report_repo import update_pipeline_status
     async with AsyncSessionLocal() as session:
         await update_pipeline_status(session, report.id, "analysis_pending")
         await session.commit()
 
     # ③ 키 데이터 추출
+    log.info("step_start", report_id=report.id, step="key_data")
     try:
         key_data = await extract_key_data(abs_path, report_id=report.id, channel=channel)
         if key_data:
@@ -122,6 +126,7 @@ async def process_single(report: ReportModel) -> dict:
 
     # ① 마크다운 변환
     markdown_text = None
+    log.info("step_start", report_id=report.id, step="markdown")
     try:
         markdown_text, converter_name = await convert_pdf_to_markdown(abs_path)
         result["steps"]["markdown"] = "ok" if markdown_text else "empty"
@@ -133,6 +138,7 @@ async def process_single(report: ReportModel) -> dict:
     images = []
     dig_result = None
     chart_texts = None
+    log.info("step_start", report_id=report.id, step="images")
     try:
         images = await extract_images_from_pdf(abs_path)
         result["steps"]["images"] = f"{len(images)} extracted"
@@ -232,9 +238,15 @@ async def main(args: argparse.Namespace) -> None:
             except asyncio.TimeoutError:
                 log.warning("analysis_timeout", report_id=report.id, timeout=_REPORT_TIMEOUT)
                 r = {"report_id": report.id, "status": "timeout"}
+                async with AsyncSessionLocal() as session:
+                    await update_pipeline_status(session, report.id, "analysis_failed")
+                    await session.commit()
             except Exception as e:
                 log.error("analysis_error", report_id=report.id, error=str(e))
                 r = {"report_id": report.id, "status": f"error: {e}"}
+                async with AsyncSessionLocal() as session:
+                    await update_pipeline_status(session, report.id, "analysis_failed")
+                    await session.commit()
             finally:
                 queue.task_done()
             done += 1
@@ -284,7 +296,6 @@ async def main(args: argparse.Namespace) -> None:
 
     # failed_ids → pipeline_status='analysis_failed'
     if failed_ids:
-        from storage.report_repo import update_pipeline_status
         for failed_cid in failed_ids:
             failed_inp = layer2_inputs.get(failed_cid)
             if failed_inp:

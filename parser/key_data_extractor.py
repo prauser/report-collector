@@ -54,7 +54,7 @@ class KeyDataResult:
     output_tokens: int = 0
 
 
-def _get_first_page_text(pdf_path) -> str | None:
+def _get_first_page_text_sync(pdf_path) -> str | None:
     """PDF 첫 2페이지 텍스트 추출. 첫 페이지가 비어있으면 2페이지도 포함."""
     try:
         import pymupdf
@@ -72,6 +72,9 @@ def _get_first_page_text(pdf_path) -> str | None:
         return None
 
 
+_FIRST_PAGE_TIMEOUT = 30  # seconds
+
+
 async def extract_key_data(
     pdf_path,
     report_id: int | None = None,
@@ -86,7 +89,14 @@ async def extract_key_data(
     if not settings.gemini_api_key:
         return None
 
-    first_page = _get_first_page_text(pdf_path)
+    try:
+        first_page = await asyncio.wait_for(
+            asyncio.to_thread(_get_first_page_text_sync, pdf_path),
+            timeout=_FIRST_PAGE_TIMEOUT,
+        )
+    except (asyncio.TimeoutError, Exception) as e:
+        log.warning("first_page_extract_timeout", path=str(pdf_path), error=str(e))
+        return None
     if not first_page:
         return None
 
