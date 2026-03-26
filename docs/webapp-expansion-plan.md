@@ -1,8 +1,8 @@
 # Report Collector → Unified Web App 확장 플랜
 
 > 작성일: 2026-03-19
-> 목적: report-collector를 매매 저널 + AI Agent 챗봇이 통합된 웹앱으로 확장하기 위한 구현 플랜
-> 상태: 플래닝 완료, Phase별 순차 구현 예정
+> 목적: 매매 저널 + AI Agent 챗봇의 상세 구현 스펙 (DB 테이블, API, 컴포넌트, 기술 스택)
+> **진행 순서와 전체 상태는 `plans/ROADMAP.md`에서 통합 관리** — 이 문서는 Phase C/D의 상세 레퍼런스로 사용
 
 ## Context
 

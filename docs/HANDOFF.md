@@ -83,30 +83,11 @@ python run_backfill.py
 
 ---
 
-## 미구현 기능 작업
+## 향후 작업
 
-### Phase 2.5 — Layer 2 안정화
-- [ ] S2b (`extract_metadata`) / Stage5 (`pdf_analyzer.py`) 레거시 코드 삭제
-- [ ] NAS 리스너 상시 실행 설정
-
-### Phase 3 — 웹 고도화 (미착수)
-- [ ] 종목별 리포트 히스토리 페이지
-- [ ] 투자 논리 체인 시각화
-- [ ] 종목/섹터 크로스 분석 뷰
-- [ ] 실시간 업데이트 (SSE 또는 polling)
-- [ ] 모바일 UX 개선
-
-### Phase 4 — AI Agent 고도화
-- 기본 구조 완료 (`api/routers/agent.py`, `web/app/agent/page.tsx`)
-- [ ] 크로스 리포트 종합 분석
-- [ ] 종목별 투자의견 변화 추적
-- [ ] 산업 트렌드 분석
-
-### 매매 저널 (webapp-expansion-plan.md)
-- [ ] CSV 업로드 → 체결 기록
-- [ ] 캔들차트 + 마커 + 보조지표
-- [ ] 성과 분석 대시보드
-- [ ] 복기 페이지
+> 전체 로드맵: `plans/ROADMAP.md` (단일 참조 문서)
+>
+> 다음 Phase: **Phase A (데이터 기반 완성)** → **Phase B (리포트 분석 시각화)** 순서로 진행
 
 ---
 
@@ -132,7 +113,8 @@ python run_backfill.py
 
 | 파일 | 내용 |
 |------|------|
-| `docs/LAYER2_DESIGN.md` | Layer 2 설계 (3-Layer 아키텍처, 체인 스키마) |
-| `docs/ARCHITECTURE_CURRENT.md` | 현재 아키텍처 |
-| `docs/webapp-expansion-plan.md` | 매매 저널 + AI Agent 확장 플랜 |
-| `plans/ROADMAP.md` | 프로젝트 로드맵 |
+| `plans/ROADMAP.md` | **통합 로드맵 (단일 참조 문서)** |
+| `docs/masterplan.md` | AI Agent 확장 설계 원본 (Phase B/D/E 레퍼런스) |
+| `docs/LAYER2_DESIGN.md` | Layer 2 구현 스펙 |
+| `docs/ARCHITECTURE_CURRENT.md` | 현재 아키텍처 + 주의사항 |
+| `docs/webapp-expansion-plan.md` | 매매 저널 + AI Agent 상세 스펙 (Phase C/D 레퍼런스) |
