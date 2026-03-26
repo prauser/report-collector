@@ -8,7 +8,12 @@ asyncpg==0.30.0
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
 
-pykrx==1.2.4
+# pykrx==1.2.4 — numpy<2.0 제약이 pandas-ta(numpy>=2.2.6)와 충돌
+# railway.toml buildCommand에서 --no-deps로 별도 설치
+deprecated>=1.2.0
+matplotlib>=3.7.0
+multipledispatch>=1.0.0
+requests>=2.31.0
 
 pandas>=2.0.0
 pandas-ta>=0.3.14b0
