@@ -5,7 +5,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatPrice(val: number | null): string {
-  if (!val) return "-";
+  if (val == null) return "-";
   return val.toLocaleString("ko-KR") + "원";
 }
 

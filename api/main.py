@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import reports, stats, pending, backfill, channels, trades, agent
+from api.routers import reports, stats, pending, backfill, channels, trades, agent, stocks, analysis
 from api.routers.trades import ohlcv_router
 from config.settings import settings
 
@@ -28,6 +28,8 @@ app.include_router(channels.router, prefix="/api")
 app.include_router(trades.router, prefix="/api")
 app.include_router(agent.router, prefix="/api")
 app.include_router(ohlcv_router, prefix="/api")
+app.include_router(stocks.router, prefix="/api")
+app.include_router(analysis.router, prefix="/api")
 
 
 @app.get("/health")

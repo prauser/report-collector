@@ -1,7 +1,9 @@
 # Web App 확장 진행 상황
 
-> 마지막 업데이트: 2026-03-20
-> 전체 플랜: [webapp-expansion-plan.md](./webapp-expansion-plan.md)
+> **⚠️ Deprecated**: 이 파일은 2026-03-20 이후 갱신되지 않음. 진행 상태는 `plans/ROADMAP.md`에서 통합 관리.
+>
+> ~~마지막 업데이트: 2026-03-20~~
+> ~~전체 플랜: [webapp-expansion-plan.md](./webapp-expansion-plan.md)~~
 
 ---
 

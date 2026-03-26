@@ -312,6 +312,103 @@ class ChatMessageResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Stocks API schemas
+# ---------------------------------------------------------------------------
+
+
+class StockListItem(BaseModel):
+    """종목 목록 항목."""
+
+    stock_code: str
+    stock_name: str | None
+    report_count: int
+    latest_report_date: date | None
+    avg_sentiment: float | None
+
+
+class StockListResponse(BaseModel):
+    """종목 목록 응답."""
+
+    total: int
+    limit: int
+    offset: int
+    items: list[StockListItem]
+
+
+class StockHistoryItem(BaseModel):
+    """종목 히스토리 항목 (리포트 1건)."""
+
+    report_id: int
+    broker: str
+    report_date: date
+    title: str
+    opinion: str | None
+    target_price: int | None
+    layer2_summary: str | None
+    layer2_sentiment: float | None
+
+
+class StockHistoryResponse(BaseModel):
+    """종목 히스토리 응답."""
+
+    stock_code: str
+    stock_name: str | None = None
+    total: int
+    limit: int
+    offset: int
+    items: list[StockHistoryItem]
+
+
+# ---------------------------------------------------------------------------
+# Analysis API schemas
+# ---------------------------------------------------------------------------
+
+
+class SectorTopStock(BaseModel):
+    """섹터 상위 종목."""
+
+    stock_code: str
+    stock_name: str | None
+    report_count: int
+
+
+class SectorListItem(BaseModel):
+    """섹터 목록 항목."""
+
+    sector_name: str
+    report_count: int
+    avg_sentiment: float | None
+    top_stocks: list[SectorTopStock]
+
+
+class SectorListResponse(BaseModel):
+    """섹터 목록 응답."""
+
+    items: list[SectorListItem]
+
+
+class SectorStockItem(BaseModel):
+    """섹터 내 종목 비교 항목."""
+
+    stock_code: str
+    stock_name: str | None
+    report_count: int
+    avg_sentiment: float | None
+    latest_opinion: str | None
+    latest_target_price: int | None
+
+
+class SectorStockResponse(BaseModel):
+    """섹터 내 종목 비교 응답."""
+
+    sector_name: str
+    items: list[SectorStockItem]
+
+
+# ---------------------------------------------------------------------------
+
+
 class LlmUsageStat(BaseModel):
     model: str
     purpose: str

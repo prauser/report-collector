@@ -1,5 +1,7 @@
 # 매매 복기 자동화 시스템 — 플래닝
 
+> **⚠️ Superseded**: 이 문서는 초기 기획 기록용으로 보존. 확정된 스펙은 `docs/webapp-expansion-plan.md`, 전체 진행 상태는 `plans/ROADMAP.md` 참조.
+>
 > AI 컨텍스트 전달용. 최종 업데이트: 2026-03-19
 
 ## 목표

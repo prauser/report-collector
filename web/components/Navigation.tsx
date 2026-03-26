@@ -13,6 +13,7 @@ import {
   Clock,
   Settings,
   X,
+  LineChart,
 } from "lucide-react";
 
 // Desktop nav groups
@@ -27,6 +28,10 @@ const desktopGroups = [
   {
     label: "매매",
     items: [{ href: "/trades", label: "매매 저널" }],
+  },
+  {
+    label: "분석",
+    items: [{ href: "/analysis", label: "종목분석" }],
   },
   {
     label: "AI Agent",
@@ -52,6 +57,7 @@ const mobileTabs = [
 // Mobile "more" menu items
 const moreItems = [
   { href: "/stats", label: "통계", icon: BarChart2 },
+  { href: "/analysis", label: "종목분석", icon: LineChart },
   { href: "/backfill", label: "백필", icon: RefreshCw },
   { href: "/pending", label: "검토 대기", icon: Clock },
   { href: "/settings", label: "설정", icon: Settings },
