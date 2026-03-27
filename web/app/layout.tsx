@@ -41,6 +41,9 @@ export default function RootLayout({
             <Link href="/pending" className="text-sm text-gray-600 hover:text-gray-900">
               검토 대기
             </Link>
+            <Link href="/agent" className="text-sm text-gray-600 hover:text-gray-900">
+              AI Agent
+            </Link>
             <Link href="/settings" className="text-sm text-gray-600 hover:text-gray-900">
               설정
             </Link>
