@@ -275,8 +275,22 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
     all_message_ids: list[int] = []
 
     try:
+        # Phase 0.5: 이미 처리된 message_id 조회 (S2a 재호출 방지)
+        _SKIP_STATUSES = ("s2a_done", "pdf_done", "pdf_failed", "analysis_pending", "analysis_failed", "done")
+        async with AsyncSessionLocal() as session:
+            from db.models import Report as _ReportCheck
+            existing_msg_ids = set((await session.scalars(
+                select(_ReportCheck.source_message_id).where(
+                    _ReportCheck.source_channel == channel_username,
+                    _ReportCheck.source_message_id.isnot(None),
+                    _ReportCheck.pipeline_status.in_(_SKIP_STATUSES),
+                )
+            )).all())
+        log.info("existing_reports_loaded", channel=channel_username, count=len(existing_msg_ids))
+
         # Phase 1: 메시지 수집 + 파싱 (빠름)
         tasks: list[_ReportTask] = []
+        n_already_done = 0
         async for message in client.iter_messages(
             channel_username,
             limit=effective_limit,
@@ -296,6 +310,12 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
             n_scanned += 1
             all_message_ids.append(message.id)
 
+            # 이미 처리된 메시지는 S2a 호출 없이 skip
+            if message.id in existing_msg_ids:
+                n_already_done += 1
+                n_skipped += 1
+                continue
+
             parsed_list = parse_messages(text, channel_username, message_id=message.id)
             if not parsed_list:
                 n_skipped += 1
@@ -311,7 +331,7 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
                 ))
 
         log.info("backfill_phase1_done", channel=channel_username,
-                 messages=n_scanned, tasks=len(tasks))
+                 messages=n_scanned, tasks=len(tasks), already_done=n_already_done)
 
         # Phase 2: Queue + Worker 패턴 (타임아웃이 큐 대기 시간 제외)
         _TASK_TIMEOUT = 300  # 건당 최대 5분

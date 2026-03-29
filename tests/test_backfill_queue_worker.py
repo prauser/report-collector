@@ -37,8 +37,12 @@ def make_mock_db_session():
     mock_run = MagicMock()
     mock_run.id = 99
 
+    mock_scalars_result = MagicMock()
+    mock_scalars_result.all = MagicMock(return_value=[])
+
     mock_session = AsyncMock()
     mock_session.scalar = AsyncMock(return_value=None)
+    mock_session.scalars = AsyncMock(return_value=mock_scalars_result)
     mock_session.get = AsyncMock(return_value=mock_run)
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
