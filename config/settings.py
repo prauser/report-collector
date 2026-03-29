@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # Gemini (차트/테이블 수치화)
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-2.5-flash-lite"
     gemini_timeout: int = 60
 
     # Layer 2 분석

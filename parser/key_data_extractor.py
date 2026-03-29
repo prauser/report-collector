@@ -180,6 +180,7 @@ async def extract_key_data(
         log.info(
             "key_data_extracted",
             report_id=report_id,
+            model=model,
             broker=result.broker,
             stock=result.stock_name,
             cost_usd=float(calc_cost_usd(model, input_tokens, output_tokens)),

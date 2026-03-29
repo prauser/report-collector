@@ -137,7 +137,8 @@ _PRICE: dict[str, dict[str, float]] = {
     "claude-haiku-3-5-20241022": {"input": 0.80, "output": 4.00},
     "claude-sonnet-4-6":         {"input": 3.00, "output": 15.00},
     "claude-opus-4-6":           {"input": 15.00, "output": 75.00},
-    "gemini-2.5-flash":          {"input": 0.15, "output": 0.60},
+    "gemini-2.5-flash":          {"input": 0.30, "output": 2.50},
+    "gemini-2.5-flash-lite":     {"input": 0.10, "output": 0.40},
 }
 
 

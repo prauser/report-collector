@@ -214,11 +214,20 @@ async def digitize_charts(
             report_id=report_id,
         )
 
+    # 품질 메트릭 계산
+    total_chars = sum(len(t) for t in digitized.texts)
+    table_rows = sum(t.count("\n|") for t in digitized.texts)
+    digit_chars = sum(1 for t in digitized.texts for c in t if c.isdigit())
+
     log.info(
         "charts_digitized",
         report_id=report_id,
+        model=model,
         images=len(images),
         success=digitized.success_count,
         cost_usd=float(digitized.total_cost_usd),
+        q_chars=total_chars,
+        q_table_rows=table_rows,
+        q_digits=digit_chars,
     )
     return digitized
