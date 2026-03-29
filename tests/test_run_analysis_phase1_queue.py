@@ -28,7 +28,7 @@ def _db_mocks():
 
 
 def _make_args(concurrency: int = 2, limit: int = 0, dry_run: bool = False) -> argparse.Namespace:
-    return argparse.Namespace(concurrency=concurrency, limit=limit, dry_run=dry_run)
+    return argparse.Namespace(concurrency=concurrency, limit=limit, dry_run=dry_run, batch_size=100)
 
 
 def _make_report(report_id: int) -> MagicMock:
@@ -109,8 +109,8 @@ class TestPhase1AllResultsCollected:
 
         printed = await _run_phase1(reports, fake_process, concurrency=2)
         # main() prints "=== Done: N processed ..."
-        done_line = next((l for l in printed if "processed" in l), "")
-        assert "3 processed" in done_line
+        done_line = next((l for l in printed if "Processed" in l), "")
+        assert "Processed: 3" in done_line
 
     @pytest.mark.asyncio
     async def test_error_counted_in_results(self):
@@ -125,8 +125,8 @@ class TestPhase1AllResultsCollected:
             return {"report_id": report.id, "status": "ok", "steps": {}}
 
         printed = await _run_phase1(reports, fake_process, concurrency=2)
-        done_line = next((l for l in printed if "processed" in l), "")
-        assert "3 processed" in done_line
+        done_line = next((l for l in printed if "Processed" in l), "")
+        assert "Processed: 3" in done_line
 
     @pytest.mark.asyncio
     async def test_timeout_counted_in_results(self):
@@ -139,8 +139,8 @@ class TestPhase1AllResultsCollected:
             return {"report_id": report.id, "status": "ok", "steps": {}}
 
         printed = await _run_phase1(reports, fake_process, concurrency=2)
-        done_line = next((l for l in printed if "processed" in l), "")
-        assert "2 processed" in done_line
+        done_line = next((l for l in printed if "Processed" in l), "")
+        assert "Processed: 2" in done_line
 
     @pytest.mark.asyncio
     async def test_mixed_outcomes_all_counted(self):
@@ -155,8 +155,8 @@ class TestPhase1AllResultsCollected:
             return {"report_id": report.id, "status": "ok", "steps": {}}
 
         printed = await _run_phase1(reports, fake_process, concurrency=3)
-        done_line = next((l for l in printed if "processed" in l), "")
-        assert "5 processed" in done_line
+        done_line = next((l for l in printed if "Processed" in l), "")
+        assert "Processed: 5" in done_line
 
 
 class TestPhase1WorkerPattern:

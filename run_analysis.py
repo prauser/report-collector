@@ -50,6 +50,7 @@ log = structlog.get_logger(__name__)
 
 _REPORT_TIMEOUT = 1800  # 건당 최대 30분 (각 단계에 자체 timeout 있음)
 _CONCURRENCY = 4  # Phase 1 동시 처리 건수
+_BATCH_THRESHOLD = 100  # Layer2 Batch 제출 임계값
 
 
 async def _get_unanalyzed_reports(limit: int) -> list[ReportModel]:
@@ -192,109 +193,10 @@ async def process_single(report: ReportModel) -> dict:
     return result
 
 
-async def main(args: argparse.Namespace) -> None:
-    limit = args.limit or 9999
-
-    print(f"=== Run Analysis ===")
-    print(f"Limit: {limit}")
-    print(f"Dry run: {args.dry_run}")
-    print(f"Gemini: {'ON' if settings.gemini_api_key else 'OFF'}")
-    print(f"Anthropic: {'ON' if settings.anthropic_api_key else 'OFF'}")
-    print()
-
-    reports = await _get_unanalyzed_reports(limit)
-    print(f"Unanalyzed reports with PDF: {len(reports)}")
-
-    if not reports:
-        print("Nothing to do.")
-        return
-
-    if args.dry_run:
-        for r in reports:
-            print(f"  [{r.id}] {r.report_date} | {r.broker or '-':15s} | "
-                  f"{r.stock_name or r.sector or '-':15s} | {(r.title or '')[:50]}")
-        print(f"\n총 {len(reports)}건 대상 (--dry-run)")
-        return
-
-    # Phase 1: 개별 분석 (키데이터 + 마크다운 + 이미지 + 차트)
-    concurrency = args.concurrency
-    print(f"\n>>> Phase 1: PDF 분석 ({len(reports)}건, 동시 {concurrency}건)...")
-    results: list[dict] = []
-    done = 0
-
-    queue: asyncio.Queue = asyncio.Queue()
-    for report in reports:
-        queue.put_nowait(report)
-
-    async def _worker():
-        nonlocal done
-        while True:
-            try:
-                report = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            try:
-                r = await asyncio.wait_for(process_single(report), timeout=_REPORT_TIMEOUT)
-            except asyncio.TimeoutError:
-                log.warning("analysis_timeout", report_id=report.id, timeout=_REPORT_TIMEOUT)
-                r = {"report_id": report.id, "status": "timeout"}
-                async with AsyncSessionLocal() as session:
-                    await update_pipeline_status(session, report.id, "analysis_failed")
-                    await session.commit()
-            except Exception as e:
-                log.error("analysis_error", report_id=report.id, error=str(e))
-                r = {"report_id": report.id, "status": f"error: {e}"}
-                async with AsyncSessionLocal() as session:
-                    await update_pipeline_status(session, report.id, "analysis_failed")
-                    await session.commit()
-            finally:
-                queue.task_done()
-            done += 1
-            status = r["status"]
-            steps = r.get("steps", {})
-            has_l2 = "layer2_input" in r
-            log.info("analyzed", progress=f"{done}/{len(reports)}", report_id=report.id,
-                     status=status, has_layer2=has_l2,
-                     md=steps.get("markdown", "-"), charts=steps.get("charts", "-"))
-            results.append(r)
-
-    num_workers = min(concurrency, len(reports))
-    if num_workers > 0:
-        workers = [asyncio.create_task(_worker()) for _ in range(num_workers)]
-        await asyncio.gather(*workers)
-
-    # Phase 2: Layer2 Batch API
-    layer2_inputs = {}
-    for r in results:
-        if "layer2_input" in r:
-            cid = f"report-{r['report_id']}"
-            layer2_inputs[cid] = r
-
-    if not layer2_inputs:
-        print("\nNo reports ready for Layer2 (no markdown).")
-        print(f"=== Done: {len(results)} processed, 0 Layer2 ===")
-        return
-
-    if not settings.anthropic_api_key:
-        print(f"\nAnthropic API key not set — skipping Layer2.")
-        print(f"=== Done: {len(results)} processed, {len(layer2_inputs)} ready for Layer2 ===")
-        return
-
-    print(f"\n>>> Phase 2: Layer2 Batch API ({len(layer2_inputs)}건)...")
-    batch_requests = [
-        build_batch_request(cid, inp["layer2_input"]["user_content"])
-        for cid, inp in layer2_inputs.items()
-    ]
-
-    try:
-        batch_results, failed_ids = await run_layer2_batch(batch_requests)
-    except Exception as e:
-        log.error("layer2_batch_failed", error=str(e))
-        print(f"\nLayer2 Batch failed: {e}")
-        print(f"=== Done: {len(results)} processed, Layer2 FAILED ===")
-        return
-
-    # failed_ids → pipeline_status='analysis_failed'
+async def _save_batch_results(
+    batch_results: dict, failed_ids: list[str], layer2_inputs: dict,
+) -> int:
+    """Batch 결과를 DB에 저장. Returns: 저장 건수."""
     if failed_ids:
         for failed_cid in failed_ids:
             failed_inp = layer2_inputs.get(failed_cid)
@@ -305,8 +207,6 @@ async def main(args: argparse.Namespace) -> None:
                 log.warning("layer2_batch_failed_set_status",
                             report_id=failed_inp["report_id"], custom_id=failed_cid)
 
-    # Phase 3: Batch 결과 저장
-    print(f"\n>>> Phase 3: 결과 저장 ({len(batch_results)}/{len(layer2_inputs)}건)...")
     n_saved = 0
     for cid, (tool_input, in_tok, out_tok, cc_tok, cr_tok) in batch_results.items():
         inp = layer2_inputs[cid]
@@ -361,16 +261,143 @@ async def main(args: argparse.Namespace) -> None:
                     await log_analysis_failure(err_session, report_id, "layer2_batch", str(e))
                     await err_session.commit()
 
+    return n_saved
+
+
+async def _submit_and_save_batch(layer2_inputs: dict, batch_num: int) -> int:
+    """Layer2 Batch 제출 → 폴링 → 저장. Returns: 저장 건수."""
+    batch_requests = [
+        build_batch_request(cid, inp["layer2_input"]["user_content"])
+        for cid, inp in layer2_inputs.items()
+    ]
+    log.info("batch_submit", batch_num=batch_num, count=len(batch_requests))
+
+    try:
+        batch_results, failed_ids = await run_layer2_batch(batch_requests)
+    except Exception as e:
+        log.error("layer2_batch_failed", batch_num=batch_num, error=str(e))
+        return 0
+
+    n_saved = await _save_batch_results(batch_results, failed_ids, layer2_inputs)
+    log.info("batch_saved", batch_num=batch_num, saved=n_saved, total=len(layer2_inputs))
+    return n_saved
+
+
+async def main(args: argparse.Namespace) -> None:
+    limit = args.limit or 9999
+
+    print(f"=== Run Analysis ===")
+    print(f"Limit: {limit}")
+    print(f"Dry run: {args.dry_run}")
+    print(f"Gemini: {'ON' if settings.gemini_api_key else 'OFF'}")
+    print(f"Anthropic: {'ON' if settings.anthropic_api_key else 'OFF'}")
+    print()
+
+    reports = await _get_unanalyzed_reports(limit)
+    print(f"Unanalyzed reports with PDF: {len(reports)}")
+
+    if not reports:
+        print("Nothing to do.")
+        return
+
+    if args.dry_run:
+        for r in reports:
+            print(f"  [{r.id}] {r.report_date} | {r.broker or '-':15s} | "
+                  f"{r.stock_name or r.sector or '-':15s} | {(r.title or '')[:50]}")
+        print(f"\n총 {len(reports)}건 대상 (--dry-run)")
+        return
+
+    # Phase 1 + 2 통합: PDF 분석 → N건 모이면 Layer2 Batch 제출 (streaming)
+    concurrency = args.concurrency
+    batch_threshold = args.batch_size
+    print(f"\n>>> 분석 시작 ({len(reports)}건, 동시 {concurrency}건, 배치 {batch_threshold}건)")
+    results: list[dict] = []
+    done = 0
+    total_saved = 0
+    batch_num = 0
+
+    # Layer2 버퍼: threshold 도달 시 batch 제출
+    l2_buffer: dict[str, dict] = {}
+
+    async def _flush_buffer():
+        """버퍼에 쌓인 layer2_inputs를 batch 제출."""
+        nonlocal batch_num, total_saved
+        if not l2_buffer or not settings.anthropic_api_key:
+            return
+        batch_num += 1
+        # 버퍼 복사 후 비우기
+        to_submit = dict(l2_buffer)
+        l2_buffer.clear()
+        n = await _submit_and_save_batch(to_submit, batch_num)
+        total_saved += n
+
+    queue: asyncio.Queue = asyncio.Queue()
+    for report in reports:
+        queue.put_nowait(report)
+
+    async def _worker():
+        nonlocal done
+        while True:
+            try:
+                report = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                r = await asyncio.wait_for(process_single(report), timeout=_REPORT_TIMEOUT)
+            except asyncio.TimeoutError:
+                log.warning("analysis_timeout", report_id=report.id, timeout=_REPORT_TIMEOUT)
+                r = {"report_id": report.id, "status": "timeout"}
+                async with AsyncSessionLocal() as session:
+                    await update_pipeline_status(session, report.id, "analysis_failed")
+                    await session.commit()
+            except Exception as e:
+                log.error("analysis_error", report_id=report.id, error=str(e))
+                r = {"report_id": report.id, "status": f"error: {e}"}
+                async with AsyncSessionLocal() as session:
+                    await update_pipeline_status(session, report.id, "analysis_failed")
+                    await session.commit()
+            finally:
+                queue.task_done()
+            done += 1
+            status = r["status"]
+            steps = r.get("steps", {})
+            has_l2 = "layer2_input" in r
+            log.info("analyzed", progress=f"{done}/{len(reports)}", report_id=report.id,
+                     status=status, has_layer2=has_l2,
+                     md=steps.get("markdown", "-"), charts=steps.get("charts", "-"))
+            results.append(r)
+
+            # Layer2 버퍼에 추가
+            if has_l2:
+                cid = f"report-{r['report_id']}"
+                l2_buffer[cid] = r
+                if len(l2_buffer) >= batch_threshold:
+                    await _flush_buffer()
+
+    num_workers = min(concurrency, len(reports))
+    if num_workers > 0:
+        workers = [asyncio.create_task(_worker()) for _ in range(num_workers)]
+        await asyncio.gather(*workers)
+
+    # 잔여 버퍼 flush
+    if l2_buffer:
+        await _flush_buffer()
+
+    if not settings.anthropic_api_key and any("layer2_input" in r for r in results):
+        l2_ready = sum(1 for r in results if "layer2_input" in r)
+        print(f"\nAnthropic API key not set — {l2_ready}건 Layer2 미처리.")
+
     print(f"\n=== Done ===")
     print(f"  Processed: {len(results)}")
-    print(f"  Layer2 submitted: {len(layer2_inputs)}")
-    print(f"  Layer2 saved: {n_saved}")
+    print(f"  Batches submitted: {batch_num}")
+    print(f"  Layer2 saved: {total_saved}")
 
 
 def cli():
     parser = argparse.ArgumentParser(description="PDF 분석 (수집과 독립 실행)")
     parser.add_argument("--limit", type=int, default=0, help="처리 건수 제한 (0=전체)")
     parser.add_argument("--concurrency", type=int, default=_CONCURRENCY, help=f"Phase 1 동시 처리 건수 (기본값: {_CONCURRENCY})")
+    parser.add_argument("--batch-size", type=int, default=_BATCH_THRESHOLD, help=f"Layer2 Batch 제출 단위 (기본값: {_BATCH_THRESHOLD})")
     parser.add_argument("--dry-run", action="store_true", help="대상만 확인")
     return parser.parse_args()
 
