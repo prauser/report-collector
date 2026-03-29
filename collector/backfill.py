@@ -37,6 +37,7 @@ from sqlalchemy import select, update as sa_update, func
 log = structlog.get_logger(__name__)
 
 _BACKFILL_CONCURRENCY = 5  # 동시 처리 리포트 수
+_SKIP_STATUSES = ("s2a_done", "pdf_done", "pdf_failed", "analysis_pending", "analysis_failed", "done")
 
 
 def _pdf_filename(message: Message) -> str | None:
@@ -276,14 +277,12 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
 
     try:
         # Phase 0.5: 이미 처리된 message_id 조회 (S2a 재호출 방지)
-        _SKIP_STATUSES = ("s2a_done", "pdf_done", "pdf_failed", "analysis_pending", "analysis_failed", "done")
         async with AsyncSessionLocal() as session:
-            from db.models import Report as _ReportCheck
             existing_msg_ids = set((await session.scalars(
-                select(_ReportCheck.source_message_id).where(
-                    _ReportCheck.source_channel == channel_username,
-                    _ReportCheck.source_message_id.isnot(None),
-                    _ReportCheck.pipeline_status.in_(_SKIP_STATUSES),
+                select(ReportModel.source_message_id).where(
+                    ReportModel.source_channel == channel_username,
+                    ReportModel.source_message_id.isnot(None),
+                    ReportModel.pipeline_status.in_(_SKIP_STATUSES),
                 )
             )).all())
         log.info("existing_reports_loaded", channel=channel_username, count=len(existing_msg_ids))
@@ -467,7 +466,7 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
     except FloodWaitError as e:
         log.warning("flood_wait", seconds=e.seconds, channel=channel_username)
         await asyncio.sleep(e.seconds)
-        last_id = 0
+        last_id = max(all_message_ids) if all_message_ids else 0
     except Exception as e:
         # 에러 시에도 처리한 만큼 last_id 기록 (재스캔 방지)
         last_id = max(all_message_ids) if all_message_ids else 0
@@ -520,17 +519,16 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
 
     # PDF 실패율 체크
     async with AsyncSessionLocal() as session:
-        from db.models import Report as _Report
         total_with_url = await session.scalar(
             select(func.count()).where(
-                _Report.source_channel == channel_username,
-                _Report.pdf_url.isnot(None),
+                ReportModel.source_channel == channel_username,
+                ReportModel.pdf_url.isnot(None),
             )
         )
         total_failed = await session.scalar(
             select(func.count()).where(
-                _Report.source_channel == channel_username,
-                _Report.pdf_download_failed.is_(True),
+                ReportModel.source_channel == channel_username,
+                ReportModel.pdf_download_failed.is_(True),
             )
         )
         if total_with_url and total_failed / total_with_url >= 0.5:

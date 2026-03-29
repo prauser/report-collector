@@ -17,6 +17,19 @@ from storage.llm_usage_repo import record_llm_usage
 
 log = structlog.get_logger(__name__)
 
+# Module-level lazy Gemini client (created once, reused across calls)
+_gemini_client = None
+
+
+def _get_gemini_client():
+    """Return the module-level Gemini client, creating it on first call."""
+    global _gemini_client
+    if _gemini_client is None:
+        from google import genai
+        _gemini_client = genai.Client(api_key=settings.gemini_api_key)
+    return _gemini_client
+
+
 # Global backoff gate — when one key-data call hits a Gemini rate limit all callers pause
 _gemini_keydata_gate = RateLimitGate("gemini_keydata")
 
@@ -101,11 +114,10 @@ async def extract_key_data(
         return None
 
     try:
-        from google import genai
         from google.genai.errors import ClientError as GeminiClientError
         import json
 
-        client = genai.Client(api_key=settings.gemini_api_key)
+        client = _get_gemini_client()
 
         # Up to 2 attempts; on rate limit trigger the global gate and retry once
         last_exc: Exception | None = None

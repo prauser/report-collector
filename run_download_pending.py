@@ -22,9 +22,9 @@ if sys.stdout.encoding != "utf-8":
 
 import argparse
 import asyncio
-import re
+import csv
 import warnings
-from datetime import datetime, timezone
+from collections import Counter
 
 import structlog
 
@@ -41,13 +41,13 @@ from collector.telegram_client import get_client
 from config.settings import settings
 from db.session import AsyncSessionLocal
 from db.models import Report as ReportModel
+from parser.generic import PATTERN_TME_MSG
 from storage.pdf_archiver import download_telegram_document, download_pdf, resolve_tme_links
 from storage.report_repo import update_pdf_info, mark_pdf_failed, update_pipeline_status
 
 log = structlog.get_logger(__name__)
 
 _CONCURRENCY = 5
-_TME_PATTERN = re.compile(r"https?://(?:t\.me|telegram\.me)/([a-zA-Z_]\w+)/(\d+)")
 
 
 def _has_pdf_attachment(message) -> bool:
@@ -63,7 +63,7 @@ def _extract_tme_links(raw_text: str | None) -> list[str]:
     """raw_text에서 t.me 메시지 링크 추출."""
     if not raw_text:
         return []
-    return [m.group(0) for m in _TME_PATTERN.finditer(raw_text)]
+    return [m.group(0) for m in PATTERN_TME_MSG.finditer(raw_text)]
 
 
 def _telegram_link(channel: str | None, msg_id: int | None) -> str | None:
@@ -169,8 +169,8 @@ async def main(args: argparse.Namespace):
     statuses = args.statuses.split(",")
     limit = args.limit
 
-    # 상태별 카운트
     async with AsyncSessionLocal() as s:
+        # 상태별 카운트
         for st in statuses:
             cnt = await s.scalar(
                 select(func.count()).select_from(ReportModel).where(
@@ -180,18 +180,14 @@ async def main(args: argparse.Namespace):
             )
             print(f"  {st}: {cnt}건 (PDF 미다운로드)")
 
-    async with AsyncSessionLocal() as s:
-        query = (
-            select(ReportModel)
-            .where(
-                ReportModel.pipeline_status.in_(statuses),
-                ReportModel.pdf_path.is_(None),
-            )
-            .order_by(ReportModel.id)
-            .limit(limit)
+        # 대상 조회 (channel 필터를 limit보다 먼저 적용)
+        query = select(ReportModel).where(
+            ReportModel.pipeline_status.in_(statuses),
+            ReportModel.pdf_path.is_(None),
         )
         if args.channel:
             query = query.where(ReportModel.source_channel == args.channel)
+        query = query.order_by(ReportModel.id).limit(limit)
         reports = list((await s.execute(query)).scalars().all())
 
     print(f"\n=== PDF 다운로드 ({len(reports)}건, 동시 {_CONCURRENCY}) ===")
@@ -217,8 +213,8 @@ async def main(args: argparse.Namespace):
     client = get_client()
     await client.start()
 
-    results = {}
-    failed_reports = []  # 실패 건 상세 기록
+    results: Counter = Counter()
+    failed_reports = []
     done = 0
     sem = asyncio.Semaphore(_CONCURRENCY)
 
@@ -227,15 +223,14 @@ async def main(args: argparse.Namespace):
         async with sem:
             code, detail = await _process_report(client, report)
             done += 1
-            results[code] = results.get(code, 0) + 1
+            results[code] += 1
 
             if code == "fail":
-                tg_link = _telegram_link(report.source_channel, report.source_message_id)
                 failed_reports.append({
                     "id": report.id,
                     "channel": report.source_channel,
                     "msg_id": report.source_message_id,
-                    "telegram_link": tg_link,
+                    "telegram_link": _telegram_link(report.source_channel, report.source_message_id),
                     "detail": detail,
                 })
 
@@ -249,9 +244,8 @@ async def main(args: argparse.Namespace):
 
     # 결과 요약
     print(f"\n=== 완료 ({done}/{len(reports)}) ===")
-    for k, v in sorted(results.items(), key=lambda x: -x[1]):
-        if v > 0:
-            print(f"  {k}: {v}")
+    for k, v in results.most_common():
+        print(f"  {k}: {v}")
 
     # 실패 건 상세 출력
     if failed_reports:
@@ -264,12 +258,11 @@ async def main(args: argparse.Namespace):
 
         # CSV로도 저장
         csv_path = "download_failures.csv"
-        with open(csv_path, "w", encoding="utf-8") as fp:
-            fp.write("report_id,channel,msg_id,telegram_link,detail\n")
+        with open(csv_path, "w", encoding="utf-8", newline="") as fp:
+            writer = csv.writer(fp)
+            writer.writerow(["report_id", "channel", "msg_id", "telegram_link", "detail"])
             for f in failed_reports:
-                detail_escaped = (f['detail'] or '').replace('"', '""')
-                fp.write(f"{f['id']},{f['channel']},{f['msg_id'] or ''},"
-                         f"{f['telegram_link'] or ''},\"{detail_escaped}\"\n")
+                writer.writerow([f["id"], f["channel"], f["msg_id"] or "", f["telegram_link"] or "", f["detail"] or ""])
         print(f"\n실패 목록 저장: {csv_path}")
 
 
