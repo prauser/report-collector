@@ -449,6 +449,8 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
         await asyncio.sleep(e.seconds)
         last_id = 0
     except Exception as e:
+        # 에러 시에도 처리한 만큼 last_id 기록 (재스캔 방지)
+        last_id = max(all_message_ids) if all_message_ids else 0
         async with AsyncSessionLocal() as session:
             run_row = await session.get(BackfillRun, run_id)
             if run_row:
@@ -459,24 +461,29 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
                 run_row.n_saved = n_saved
                 run_row.n_pending = n_pending
                 run_row.n_skipped = n_skipped
+                run_row.to_message_id = last_id or None
                 await session.commit()
         raise
-
-    # last_message_id 업데이트
-    if last_id:
-        async with AsyncSessionLocal() as session:
-            channel_row = await session.scalar(
-                select(Channel).where(Channel.channel_username == channel_username)
-            )
-            if channel_row:
-                channel_row.last_message_id = last_id
-                session.add(channel_row)
-            else:
-                session.add(Channel(
-                    channel_username=channel_username,
-                    last_message_id=last_id,
-                ))
-            await session.commit()
+    finally:
+        # 정상/에러 모두: 처리한 마지막 메시지 ID로 업데이트
+        if last_id:
+            try:
+                async with AsyncSessionLocal() as session:
+                    channel_row = await session.scalar(
+                        select(Channel).where(Channel.channel_username == channel_username)
+                    )
+                    if channel_row:
+                        channel_row.last_message_id = last_id
+                        session.add(channel_row)
+                    else:
+                        session.add(Channel(
+                            channel_username=channel_username,
+                            last_message_id=last_id,
+                        ))
+                    await session.commit()
+                    log.info("last_message_id_updated", channel=channel_username, last_id=last_id)
+            except Exception as update_err:
+                log.warning("last_message_id_update_failed", channel=channel_username, error=str(update_err))
 
     # 런 완료 기록
     async with AsyncSessionLocal() as session:
