@@ -188,6 +188,7 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
                             "opinion": _t(key_data.opinion, 20),
                             "target_price": key_data.target_price,
                             "report_type": _t(key_data.report_type, 50),
+                            "title": _t(key_data.title, 500),
                         }.items() if v
                     }
                     if key_meta:

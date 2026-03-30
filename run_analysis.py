@@ -107,6 +107,7 @@ async def process_single(report: ReportModel) -> dict:
                     "opinion": _trunc(key_data.opinion, 20),
                     "target_price": key_data.target_price,
                     "report_type": _trunc(key_data.report_type, 50),
+                    "title": _trunc(key_data.title, 500),
                 }.items() if v
             }
             if key_meta:
