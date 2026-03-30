@@ -98,6 +98,15 @@ async def process_single(report: ReportModel) -> dict:
             def _trunc(val, maxlen):
                 return val[:maxlen] if isinstance(val, str) and len(val) > maxlen else val
 
+            # key_data.date → report_date 업데이트 (잘못된 날짜 보정)
+            parsed_date = None
+            if key_data.date:
+                try:
+                    from datetime import date as _date
+                    parsed_date = _date.fromisoformat(key_data.date)
+                except (ValueError, TypeError):
+                    pass
+
             key_meta = {
                 k: v for k, v in {
                     "broker": _trunc(key_data.broker, 50),
@@ -108,6 +117,7 @@ async def process_single(report: ReportModel) -> dict:
                     "target_price": key_data.target_price,
                     "report_type": _trunc(key_data.report_type, 50),
                     "title": _trunc(key_data.title, 500),
+                    "report_date": parsed_date,
                 }.items() if v
             }
             if key_meta:

@@ -179,6 +179,12 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
                 )
                 if key_data:
                     _t = lambda v, n: v[:n] if isinstance(v, str) and len(v) > n else v
+                    parsed_date = None
+                    if key_data.date:
+                        try:
+                            parsed_date = date.fromisoformat(key_data.date)
+                        except (ValueError, TypeError):
+                            pass
                     key_meta = {
                         k: v for k, v in {
                             "broker": _t(key_data.broker, 50),
@@ -189,6 +195,7 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
                             "target_price": key_data.target_price,
                             "report_type": _t(key_data.report_type, 50),
                             "title": _t(key_data.title, 500),
+                            "report_date": parsed_date,
                         }.items() if v
                     }
                     if key_meta:
