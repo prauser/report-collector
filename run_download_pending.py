@@ -190,7 +190,7 @@ async def main(args: argparse.Namespace):
         query = query.order_by(ReportModel.id).limit(limit)
         reports = list((await s.execute(query)).scalars().all())
 
-    print(f"\n=== PDF 다운로드 ({len(reports)}건, 동시 {_CONCURRENCY}) ===")
+    print(f"\n=== PDF 다운로드 ({len(reports)}건, 동시 {args.concurrency}) ===")
     print(f"대상: {statuses}, Limit: {limit}")
     if args.channel:
         print(f"Channel: {args.channel}")
@@ -216,7 +216,7 @@ async def main(args: argparse.Namespace):
     results: Counter = Counter()
     failed_reports = []
     done = 0
-    sem = asyncio.Semaphore(_CONCURRENCY)
+    sem = asyncio.Semaphore(args.concurrency)
 
     async def _worker(report):
         nonlocal done
@@ -274,6 +274,8 @@ def cli():
                         help="처리 건수 (기본: 1000)")
     parser.add_argument("--channel", default=None,
                         help="특정 채널만")
+    parser.add_argument("--concurrency", type=int, default=_CONCURRENCY,
+                        help=f"동시 다운로드 수 (기본: {_CONCURRENCY})")
     parser.add_argument("--dry-run", action="store_true",
                         help="대상만 확인")
     return parser.parse_args()
