@@ -501,7 +501,8 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
         raise
     finally:
         # 정상/에러 모두: 처리한 마지막 메시지 ID로 업데이트
-        if last_id:
+        # reverse 모드에서는 업데이트 안 함 (forward 진행 위치를 보존)
+        if last_id and not reverse:
             try:
                 async with AsyncSessionLocal() as session:
                     channel_row = await session.scalar(
