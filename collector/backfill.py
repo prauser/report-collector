@@ -264,12 +264,13 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
             select(Channel).where(Channel.channel_username == channel_username)
         )
         min_id = channel_row.last_message_id if channel_row else 0
+        reverse_min_id = channel_row.reverse_min_id if channel_row else None
 
     # 런 기록 생성
     run = BackfillRun(
         channel_username=channel_username,
         run_date=date.today(),
-        from_message_id=min_id or None,
+        from_message_id=reverse_min_id if reverse else (min_id or None),
         status="running",
     )
     async with AsyncSessionLocal() as session:
@@ -302,8 +303,11 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
         n_already_done = 0
         iter_kwargs = {"limit": effective_limit}
         if reverse:
-            # 최신→과거: min_id 없이, reverse=False (Telethon 기본 = 최신부터)
+            # 최신→과거: offset_id부터 아래로 (Telethon 기본 = 최신부터)
             iter_kwargs["reverse"] = False
+            if reverse_min_id:
+                iter_kwargs["offset_id"] = reverse_min_id
+                log.info("reverse_resume", channel=channel_username, offset_id=reverse_min_id)
         else:
             # 과거→최신: min_id 이후, reverse=True (오래된 것부터)
             iter_kwargs["min_id"] = min_id or 0
@@ -500,26 +504,31 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
                 await session.commit()
         raise
     finally:
-        # 정상/에러 모두: 처리한 마지막 메시지 ID로 업데이트
-        # reverse 모드에서는 업데이트 안 함 (forward 진행 위치를 보존)
-        if last_id and not reverse:
+        # 정상/에러 모두: 진행 위치 업데이트
+        if all_message_ids:
             try:
                 async with AsyncSessionLocal() as session:
                     channel_row = await session.scalar(
                         select(Channel).where(Channel.channel_username == channel_username)
                     )
-                    if channel_row:
-                        channel_row.last_message_id = last_id
+                    if not channel_row:
+                        channel_row = Channel(channel_username=channel_username)
                         session.add(channel_row)
+
+                    if reverse:
+                        # reverse: 가장 작은 ID로 reverse_min_id 갱신
+                        new_min = min(all_message_ids)
+                        if not channel_row.reverse_min_id or new_min < channel_row.reverse_min_id:
+                            channel_row.reverse_min_id = new_min
+                            log.info("reverse_min_id_updated", channel=channel_username, reverse_min_id=new_min)
                     else:
-                        session.add(Channel(
-                            channel_username=channel_username,
-                            last_message_id=last_id,
-                        ))
+                        # forward: 가장 큰 ID로 last_message_id 갱신
+                        channel_row.last_message_id = max(all_message_ids)
+                        log.info("last_message_id_updated", channel=channel_username, last_id=max(all_message_ids))
+
                     await session.commit()
-                    log.info("last_message_id_updated", channel=channel_username, last_id=last_id)
             except Exception as update_err:
-                log.warning("last_message_id_update_failed", channel=channel_username, error=str(update_err))
+                log.warning("progress_update_failed", channel=channel_username, error=str(update_err))
 
     # 런 완료 기록
     async with AsyncSessionLocal() as session:

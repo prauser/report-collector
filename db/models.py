@@ -127,6 +127,7 @@ class Channel(Base):
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reverse_min_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
