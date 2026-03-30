@@ -81,6 +81,7 @@ async def main():
                 "opinion": _t(key_data.opinion, 20),
                 "target_price": key_data.target_price,
                 "report_type": _t(key_data.report_type, 50),
+                "title": _t(key_data.title, 500),
             }.items() if v is not None
         }
 

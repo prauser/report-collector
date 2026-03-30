@@ -6,6 +6,7 @@ from sqlalchemy import Float, and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db
+from api.layer2_helpers import _display_title
 from api.schemas import (
     StockHistoryItem,
     StockHistoryResponse,
@@ -175,7 +176,7 @@ async def get_stock_history(
                 report_id=report.id,
                 broker=report.broker,
                 report_date=report.report_date,
-                title=report.title,
+                title=_display_title(report, ra),
                 opinion=report.opinion,
                 target_price=report.target_price,
                 layer2_summary=layer2_summary,
