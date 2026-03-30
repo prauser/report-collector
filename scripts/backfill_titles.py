@@ -30,7 +30,7 @@ async def backfill_titles(apply: bool = False):
             select(Report.id, Report.title, ReportAnalysis.analysis_data)
             .join(ReportAnalysis, ReportAnalysis.report_id == Report.id)
         )
-        for row in await session.stream(stmt):
+        async for row in await session.stream(stmt):
             report_id, current_title, analysis_data = row._tuple()
             meta_title = (analysis_data or {}).get("meta", {}).get("title", "")
             if not meta_title:
