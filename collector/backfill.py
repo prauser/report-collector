@@ -250,10 +250,11 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
     return _ReportResult(action, message.id, layer2_input=layer2_input)
 
 
-async def backfill_channel(channel_username: str, limit: int | None = None) -> int:
+async def backfill_channel(channel_username: str, limit: int | None = None, reverse: bool = False) -> int:
     """
     채널의 히스토리를 백필.
-    channels 테이블의 last_message_id 이후 메시지만 수집.
+    reverse=False (기본): last_message_id 이후 → 오래된 것부터 (forward)
+    reverse=True: 최신 메시지부터 → 과거로 (backward)
     Returns: 저장된 레코드 수
     """
     client = get_client()
@@ -277,7 +278,8 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
         await session.refresh(run)
     run_id = run.id
 
-    log.info("backfill_start", channel=channel_username, min_id=min_id, run_id=run_id)
+    log.info("backfill_start", channel=channel_username, min_id=min_id, run_id=run_id,
+             direction="backward" if reverse else "forward")
 
     n_scanned = n_saved = n_pending = n_skipped = 0
     effective_limit = limit or settings.backfill_limit or None
@@ -298,11 +300,17 @@ async def backfill_channel(channel_username: str, limit: int | None = None) -> i
         # Phase 1: 메시지 수집 + 파싱 (빠름)
         tasks: list[_ReportTask] = []
         n_already_done = 0
+        iter_kwargs = {"limit": effective_limit}
+        if reverse:
+            # 최신→과거: min_id 없이, reverse=False (Telethon 기본 = 최신부터)
+            iter_kwargs["reverse"] = False
+        else:
+            # 과거→최신: min_id 이후, reverse=True (오래된 것부터)
+            iter_kwargs["min_id"] = min_id or 0
+            iter_kwargs["reverse"] = True
         async for message in client.iter_messages(
             channel_username,
-            limit=effective_limit,
-            min_id=min_id or 0,
-            reverse=True,
+            **iter_kwargs,
         ):
             if not isinstance(message, Message):
                 continue

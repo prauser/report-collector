@@ -205,13 +205,14 @@ async def main(args: argparse.Namespace):
 
     print(f"\nActive channels: {channels}")
     print(f"Limit per channel: {limit}")
-    print(f"Layer2: {'ON' if settings.analysis_enabled else 'OFF'} | Gemini: {'ON' if settings.gemini_api_key else 'OFF'}")
+    direction = "backward (최신→과거)" if getattr(args, 'reverse', False) else "forward (과거→최신)"
+    print(f"Layer2: {'ON' if settings.analysis_enabled else 'OFF'} | Gemini: {'ON' if settings.gemini_api_key else 'OFF'} | Direction: {direction}")
     print("=" * 60)
 
     for ch in channels:
         print(f"\n>>> Backfilling {ch} (limit={limit})...")
         try:
-            saved = await backfill_channel(ch, limit=limit)
+            saved = await backfill_channel(ch, limit=limit, reverse=getattr(args, 'reverse', False))
             print(f"<<< {ch}: {saved} saved")
         except Exception as e:
             import traceback
@@ -248,6 +249,12 @@ def cli() -> argparse.Namespace:
         type=int,
         default=DEFAULT_LIMIT,
         help=f"처리 건수 제한 (기본값: {DEFAULT_LIMIT})",
+    )
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        default=False,
+        help="최신 메시지부터 역순 스캔 (기본: 오래된 것부터)",
     )
     return parser.parse_args()
 
