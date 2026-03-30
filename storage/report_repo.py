@@ -113,7 +113,7 @@ async def mark_pdf_failed(session: AsyncSession, report_id: int, reason: str = "
     await session.execute(
         update(Report).where(Report.id == report_id).values(
             pdf_download_failed=True,
-            pdf_fail_reason=reason,
+            pdf_fail_reason=reason[:50],
             pdf_fail_retryable=retryable,
             pipeline_status="pdf_failed",
         )
