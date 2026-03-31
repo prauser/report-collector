@@ -30,12 +30,56 @@ from db.session import AsyncSessionLocal
 from parser.key_data_extractor import extract_key_data
 
 CHUNK = 500
+_CACHE_FILE = "backfill_dates_cache.json"
 # 수집일로 잘못 들어간 날짜 범위 (backfill 실행 시기)
 SUSPECT_START = date(2026, 3, 1)
 SUSPECT_END = date(2026, 3, 31)
 
 
+def _load_cache() -> list[tuple] | None:
+    """캐시 파일에서 스캔 결과 로드."""
+    import json
+    try:
+        with open(_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return [(r["id"], r["old"], r["new"], r["title"]) for r in data]
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _save_cache(updates: list[tuple]):
+    """스캔 결과를 캐시 파일에 저장."""
+    import json
+    data = [{"id": rid, "old": str(old), "new": str(new), "title": t} for rid, old, new, t in updates]
+    with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"  캐시 저장: {_CACHE_FILE} ({len(data)}건)")
+
+
 async def backfill_dates(apply: bool = False, scan_all: bool = False):
+    # apply 모드에서 캐시가 있으면 스캔 skip
+    if apply:
+        cached = _load_cache()
+        if cached:
+            print(f"캐시 로드: {_CACHE_FILE} ({len(cached)}건) — Gemini 스캔 생략\n")
+            updates = [(rid, old, date.fromisoformat(new) if isinstance(new, str) else new, t) for rid, old, new, t in cached]
+            done = 0
+            skipped_dedup = 0
+            for report_id, _, new_date, title in updates:
+                try:
+                    async with AsyncSessionLocal() as session:
+                        await session.execute(
+                            sa_update(Report).where(Report.id == report_id).values(report_date=new_date)
+                        )
+                        await session.commit()
+                    done += 1
+                except Exception:
+                    skipped_dedup += 1
+                if (done + skipped_dedup) % 500 == 0:
+                    print(f"  {done + skipped_dedup}/{len(updates)} 처리 (성공 {done}, dedup skip {skipped_dedup})")
+            print(f"\n완료: {done}건 보정, {skipped_dedup}건 dedup skip")
+            return
+
     async with AsyncSessionLocal() as session:
         stmt = (
             select(Report.id, Report.report_date, Report.pdf_path, Report.title)
@@ -101,22 +145,28 @@ async def backfill_dates(apply: bool = False, scan_all: bool = False):
     if len(updates) > 30:
         print(f"  ... 외 {len(updates) - 30}건")
 
+    # 스캔 결과 캐시 저장 (apply 시 재사용)
+    _save_cache(updates)
+
     if not apply:
         print("\ndry-run 모드입니다. --apply 로 실행하세요.")
         return
 
     done = 0
-    for i in range(0, len(updates), CHUNK):
-        chunk = updates[i : i + CHUNK]
-        async with AsyncSessionLocal() as session:
-            await session.execute(
-                sa_update(Report),
-                [{"id": rid, "report_date": new_d} for rid, _, new_d, _ in chunk],
-            )
-            await session.commit()
-        done += len(chunk)
-        print(f"  {done}/{len(updates)} 완료")
-    print(f"\n{len(updates)}건 날짜 보정 완료.")
+    skipped_dedup = 0
+    for report_id, _, new_date, title in updates:
+        try:
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    sa_update(Report).where(Report.id == report_id).values(report_date=new_date)
+                )
+                await session.commit()
+            done += 1
+        except Exception:
+            skipped_dedup += 1
+        if (done + skipped_dedup) % 500 == 0:
+            print(f"  {done + skipped_dedup}/{len(updates)} 처리 (성공 {done}, dedup skip {skipped_dedup})")
+    print(f"\n완료: {done}건 보정, {skipped_dedup}건 dedup skip")
 
 
 def main():
