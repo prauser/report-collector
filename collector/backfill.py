@@ -354,10 +354,36 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
 
         # Phase 2: Queue + Worker 패턴 (타임아웃이 큐 대기 시간 제외)
         _TASK_TIMEOUT = 300  # 건당 최대 5분
+        _CHECKPOINT_INTERVAL = 100  # N건마다 진행 위치 저장
         results: list[_ReportResult | Exception] = []
         layer2_inputs: dict[str, _Layer2Input] = {}
+        n_processed = 0
+
+        async def _save_checkpoint():
+            """현재까지 처리한 진행 위치를 DB에 저장."""
+            if not all_message_ids:
+                return
+            try:
+                async with AsyncSessionLocal() as session:
+                    channel_row = await session.scalar(
+                        select(Channel).where(Channel.channel_username == channel_username)
+                    )
+                    if not channel_row:
+                        return
+                    if reverse:
+                        new_min = min(all_message_ids)
+                        if not channel_row.reverse_min_id or new_min < channel_row.reverse_min_id:
+                            channel_row.reverse_min_id = new_min
+                            log.info("checkpoint_reverse_min_id", channel=channel_username, reverse_min_id=new_min)
+                    else:
+                        channel_row.last_message_id = max(all_message_ids)
+                        log.info("checkpoint_last_message_id", channel=channel_username, last_id=max(all_message_ids))
+                    await session.commit()
+            except Exception as e:
+                log.warning("checkpoint_failed", channel=channel_username, error=str(e))
 
         async def _worker():
+            nonlocal n_processed
             while True:
                 try:
                     task = queue.get_nowait()
@@ -379,6 +405,9 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
                     results.append(exc)
                 finally:
                     queue.task_done()
+                    n_processed += 1
+                    if n_processed % _CHECKPOINT_INTERVAL == 0:
+                        await _save_checkpoint()
 
         queue = asyncio.Queue()
         for t in tasks:
