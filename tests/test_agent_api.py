@@ -605,7 +605,7 @@ class TestListSessions:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.json() == {"sessions": []}
 
     @pytest.mark.asyncio
     async def test_list_sessions_returns_newest_first(self):
@@ -622,7 +622,7 @@ class TestListSessions:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions")
 
-        data = resp.json()
+        data = resp.json()["sessions"]
         assert len(data) == 2
         assert data[0]["id"] == 2
         assert data[1]["id"] == 1
@@ -640,7 +640,7 @@ class TestListSessions:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions")
 
-        data = resp.json()
+        data = resp.json()["sessions"]
         assert len(data) == 1
         assert data[0]["message_count"] == 5
 
@@ -657,7 +657,7 @@ class TestListSessions:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions")
 
-        data = resp.json()[0]
+        data = resp.json()["sessions"][0]
         for field in ("id", "title", "message_count", "created_at", "updated_at"):
             assert field in data, f"Missing field: {field}"
 
@@ -674,7 +674,7 @@ class TestListSessions:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions")
 
-        assert resp.json()[0]["title"] == "삼성전자 질문"
+        assert resp.json()["sessions"][0]["title"] == "삼성전자 질문"
 
 
 # ──────────────────────────────────────────────
@@ -692,7 +692,7 @@ class TestGetSessionMessages:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions/1/messages")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.json() == {"messages": []}
 
     @pytest.mark.asyncio
     async def test_get_messages_returns_in_order(self):
@@ -706,7 +706,7 @@ class TestGetSessionMessages:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions/1/messages")
 
-        data = resp.json()
+        data = resp.json()["messages"]
         assert len(data) == 2
         assert data[0]["role"] == "user"
         assert data[1]["role"] == "assistant"
@@ -722,7 +722,7 @@ class TestGetSessionMessages:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions/1/messages")
 
-        item = resp.json()[0]
+        item = resp.json()["messages"][0]
         for field in ("id", "session_id", "role", "content", "created_at"):
             assert field in item, f"Missing field: {field}"
 
@@ -747,7 +747,7 @@ class TestGetSessionMessages:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.get("/api/agent/sessions/1/messages")
 
-        assert resp.json()[0]["content"] == "삼성전자 분석 요청"
+        assert resp.json()["messages"][0]["content"] == "삼성전자 분석 요청"
 
 
 # ──────────────────────────────────────────────

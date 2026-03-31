@@ -309,6 +309,14 @@ class ChatMessageResponse(BaseModel):
     created_at: datetime
 
 
+class ChatSessionListResponse(BaseModel):
+    sessions: list[ChatSessionResponse]
+
+
+class ChatMessageListResponse(BaseModel):
+    messages: list[ChatMessageResponse]
+
+
 # ---------------------------------------------------------------------------
 
 

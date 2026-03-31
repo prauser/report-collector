@@ -15,7 +15,13 @@ from agent.chat_handler import get_default_provider, stream_to_sse
 from agent.context_builder import build_context
 from agent.prompt_templates import SYSTEM_PROMPT, build_user_prompt
 from api.deps import get_db
-from api.schemas import ChatMessageResponse, ChatRequest, ChatSessionResponse
+from api.schemas import (
+    ChatMessageListResponse,
+    ChatMessageResponse,
+    ChatRequest,
+    ChatSessionListResponse,
+    ChatSessionResponse,
+)
 from config.settings import settings
 from db.models import ChatMessage, ChatSession
 from db.session import AsyncSessionLocal
@@ -175,10 +181,10 @@ async def chat(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/sessions", response_model=list[ChatSessionResponse])
+@router.get("/sessions", response_model=ChatSessionListResponse)
 async def list_sessions(
     db: AsyncSession = Depends(get_db),
-) -> list[ChatSessionResponse]:
+) -> ChatSessionListResponse:
     """대화 세션 목록 (최신순). 메시지 수 포함."""
     result = await db.execute(
         select(
@@ -190,10 +196,12 @@ async def list_sessions(
         .order_by(ChatSession.created_at.desc())
     )
     rows = result.all()
-    return [
-        _session_to_response(session, message_count=cnt)
-        for session, cnt in rows
-    ]
+    return ChatSessionListResponse(
+        sessions=[
+            _session_to_response(session, message_count=cnt)
+            for session, cnt in rows
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +209,11 @@ async def list_sessions(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/sessions/{session_id}/messages", response_model=list[ChatMessageResponse])
+@router.get("/sessions/{session_id}/messages", response_model=ChatMessageListResponse)
 async def get_session_messages(
     session_id: int,
     db: AsyncSession = Depends(get_db),
-) -> list[ChatMessageResponse]:
+) -> ChatMessageListResponse:
     """특정 세션의 메시지 히스토리 (시간순)."""
     # 세션 존재 확인
     session_result = await db.execute(
@@ -220,7 +228,9 @@ async def get_session_messages(
         .order_by(ChatMessage.created_at)
     )
     msgs = list(msgs_result.scalars().all())
-    return [_message_to_response(m) for m in msgs]
+    return ChatMessageListResponse(
+        messages=[_message_to_response(m) for m in msgs]
+    )
 
 
 # ---------------------------------------------------------------------------
