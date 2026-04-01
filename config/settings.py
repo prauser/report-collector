@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     llm_pdf_model: str = "claude-sonnet-4-6"
     llm_max_retries: int = 2
     llm_timeout: int = 30
+    agent_timeout: int = 120
 
     # Agent 챗봇
     agent_model: str = "claude-sonnet-4-6"

@@ -138,33 +138,42 @@ def _make_app(db: AsyncMock) -> FastAPI:
 # Mock 패치 헬퍼
 # ──────────────────────────────────────────────
 
-async def _fake_sse(provider, messages, model, system=None, max_tokens=4096):
+async def _fake_sse(messages, model, system, tools, db_session, max_iterations=10):
     yield 'data: {"type": "text", "text": "안녕"}\n\n'
     yield 'data: {"type": "text", "text": "하세요"}\n\n'
     yield 'data: {"type": "done"}\n\n'
 
 
 def _stream_patch():
-    return patch("api.routers.agent.stream_to_sse", side_effect=_fake_sse)
-
-
-def _context_patch(value=None):
-    return patch("api.routers.agent.build_context", new=AsyncMock(return_value=value))
-
-
-def _provider_patch():
-    return patch("api.routers.agent.get_default_provider", return_value=MagicMock())
+    return patch("api.routers.agent.stream_agent_response", side_effect=_fake_sse)
 
 
 def _session_local_patch():
-    """AsyncSessionLocal() context manager mock."""
+    """AsyncSessionLocal() context manager mock.
+
+    agent.py calls AsyncSessionLocal() twice:
+      1. Inside sse_generator as `tool_session` (passed to stream_agent_response)
+      2. After streaming as `save_session` (to persist the assistant message)
+
+    We return two distinct AsyncMock sessions so tests can assert on save_session.
+    """
+    tool_db = AsyncMock()
+    tool_db.add = MagicMock()
+    tool_db.commit = AsyncMock()
+
     save_db = AsyncMock()
     save_db.add = MagicMock()
     save_db.commit = AsyncMock()
 
+    sessions = [tool_db, save_db]
+    call_index = 0
+
     @asynccontextmanager
     async def _fake_session_local():
-        yield save_db
+        nonlocal call_index
+        db = sessions[call_index % len(sessions)]
+        call_index += 1
+        yield db
 
     return patch("api.routers.agent.AsyncSessionLocal", side_effect=_fake_session_local), save_db
 
@@ -189,7 +198,7 @@ class TestChatEndpoint:
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 resp = await ac.post("/api/agent/chat", json={"message": "삼성전자"})
         assert resp.status_code == 200
@@ -207,7 +216,7 @@ class TestChatEndpoint:
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 resp = await ac.post("/api/agent/chat", json={"message": "안녕"})
         assert "text/event-stream" in resp.headers["content-type"]
@@ -225,7 +234,7 @@ class TestChatEndpoint:
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 resp = await ac.post("/api/agent/chat", json={"message": "안녕"})
 
@@ -248,7 +257,7 @@ class TestChatEndpoint:
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 resp = await ac.post("/api/agent/chat", json={"message": "안녕"})
 
@@ -273,7 +282,7 @@ class TestChatEndpoint:
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post("/api/agent/chat", json={"message": "테스트 질문"})
 
@@ -296,7 +305,7 @@ class TestChatEndpoint:
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post("/api/agent/chat", json={"message": "새 세션"})
 
@@ -319,7 +328,7 @@ class TestChatEndpoint:
         long_msg = "가" * 60
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post("/api/agent/chat", json={"message": long_msg})
 
@@ -341,7 +350,7 @@ class TestChatEndpoint:
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 resp = await ac.post(
                     "/api/agent/chat",
@@ -356,12 +365,11 @@ class TestChatEndpoint:
         db = _make_db(session_obj=None)
 
         app = _make_app(db)
-        with _context_patch(), _provider_patch():
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-                resp = await ac.post(
-                    "/api/agent/chat",
-                    json={"message": "질문", "session_id": 99999},
-                )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/api/agent/chat",
+                json={"message": "질문", "session_id": 99999},
+            )
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
@@ -379,15 +387,14 @@ class TestChatEndpoint:
 
         captured: list[list[dict]] = []
 
-        async def _capturing_sse(provider, messages, model, system=None, max_tokens=4096):
+        async def _capturing_sse(messages, model, system, tools, db_session, max_iterations=10):
             captured.append(messages)
             yield 'data: {"type": "text", "text": "응답"}\n\n'
             yield 'data: {"type": "done"}\n\n'
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with patch("api.routers.agent.stream_to_sse", side_effect=_capturing_sse), \
-             _context_patch(), _provider_patch(), sl_patch:
+        with patch("api.routers.agent.stream_agent_response", side_effect=_capturing_sse), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post(
                     "/api/agent/chat",
@@ -402,6 +409,7 @@ class TestChatEndpoint:
         assert msgs[0]["content"] == "이전 질문"
         assert msgs[1]["role"] == "assistant"
         assert msgs[2]["role"] == "user"
+        assert msgs[2]["content"] == "새 질문"
 
     @pytest.mark.asyncio
     async def test_chat_context_report_count_stored(self):
@@ -417,20 +425,20 @@ class TestChatEndpoint:
 
         db.add = _add
 
-        fake_context = "report_id: 1\nreport_id: 2\nreport_id: 3\n"
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(value=fake_context), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post("/api/agent/chat", json={"message": "삼성전자"})
 
         user_msgs = [m for m in added_messages if m.role == "user"]
         assert len(user_msgs) == 1
-        assert user_msgs[0].context_report_count == 3
+        # tool-use 모드에서는 context pre-fetch 없이 항상 0
+        assert user_msgs[0].context_report_count == 0
 
     @pytest.mark.asyncio
     async def test_chat_system_prompt_passed(self):
-        """SYSTEM_PROMPT가 stream_to_sse에 전달된다."""
+        """TOOL_SYSTEM_PROMPT가 stream_agent_response에 전달된다."""
         db = _make_db()
 
         def _add(obj):
@@ -441,15 +449,14 @@ class TestChatEndpoint:
 
         captured_kwargs = []
 
-        async def _capturing_sse(provider, messages, model, system=None, max_tokens=4096):
+        async def _capturing_sse(messages, model, system, tools, db_session, max_iterations=10):
             captured_kwargs.append({"system": system, "model": model})
             yield 'data: {"type": "text", "text": "ok"}\n\n'
             yield 'data: {"type": "done"}\n\n'
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with patch("api.routers.agent.stream_to_sse", side_effect=_capturing_sse), \
-             _context_patch(), _provider_patch(), sl_patch:
+        with patch("api.routers.agent.stream_agent_response", side_effect=_capturing_sse), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post("/api/agent/chat", json={"message": "질문"})
 
@@ -468,13 +475,12 @@ class TestChatEndpoint:
 
         db.add = _add
 
-        async def _error_sse(provider, messages, model, system=None, max_tokens=4096):
+        async def _error_sse(messages, model, system, tools, db_session, max_iterations=10):
             yield 'data: {"type": "error", "message": "LLM timeout"}\n\n'
 
         sl_patch, save_db = _session_local_patch()
         app = _make_app(db)
-        with patch("api.routers.agent.stream_to_sse", side_effect=_error_sse), \
-             _context_patch(), _provider_patch(), sl_patch:
+        with patch("api.routers.agent.stream_agent_response", side_effect=_error_sse), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post("/api/agent/chat", json={"message": "질문"})
 
@@ -505,15 +511,14 @@ class TestChatEndpoint:
 
         captured: list[list[dict]] = []
 
-        async def _capturing_sse(provider, messages, model, system=None, max_tokens=4096):
+        async def _capturing_sse(messages, model, system, tools, db_session, max_iterations=10):
             captured.append(messages)
             yield 'data: {"type": "text", "text": "응답"}\n\n'
             yield 'data: {"type": "done"}\n\n'
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with patch("api.routers.agent.stream_to_sse", side_effect=_capturing_sse), \
-             _context_patch(), _provider_patch(), sl_patch:
+        with patch("api.routers.agent.stream_agent_response", side_effect=_capturing_sse), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post(
                     "/api/agent/chat",
@@ -546,15 +551,14 @@ class TestChatEndpoint:
 
         captured: list[list[dict]] = []
 
-        async def _capturing_sse(provider, messages, model, system=None, max_tokens=4096):
+        async def _capturing_sse(messages, model, system, tools, db_session, max_iterations=10):
             captured.append(messages)
             yield 'data: {"type": "text", "text": "응답"}\n\n'
             yield 'data: {"type": "done"}\n\n'
 
         sl_patch, _ = _session_local_patch()
         app = _make_app(db)
-        with patch("api.routers.agent.stream_to_sse", side_effect=_capturing_sse), \
-             _context_patch(), _provider_patch(), sl_patch:
+        with patch("api.routers.agent.stream_agent_response", side_effect=_capturing_sse), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post(
                     "/api/agent/chat",
@@ -578,7 +582,7 @@ class TestChatEndpoint:
 
         sl_patch, save_db = _session_local_patch()
         app = _make_app(db)
-        with _stream_patch(), _context_patch(), _provider_patch(), sl_patch:
+        with _stream_patch(), sl_patch:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 await ac.post("/api/agent/chat", json={"message": "질문"})
 

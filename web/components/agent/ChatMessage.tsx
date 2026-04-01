@@ -2,6 +2,7 @@
 
 import { UiMessage } from "@/lib/agent-types";
 import MarkdownRenderer from "@/components/shared/MarkdownRenderer";
+import ThinkingProcess from "@/components/agent/ThinkingProcess";
 
 interface Props {
   message: UiMessage;
@@ -36,6 +37,13 @@ export default function ChatMessage({ message }: Props) {
           className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm"
           data-testid="chat-message-assistant"
         >
+          {(message.thinking?.length || message.toolSteps?.length) ? (
+            <ThinkingProcess
+              thinking={message.thinking}
+              toolSteps={message.toolSteps}
+              isStreaming={message.streaming}
+            />
+          ) : null}
           {message.streaming && message.content === "" ? (
             <span className="flex gap-1 items-center py-1">
               <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce [animation-delay:0ms]" />

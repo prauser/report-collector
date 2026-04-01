@@ -11,9 +11,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F401 — used for type hints in Depends
 
-from agent.chat_handler import get_default_provider, stream_to_sse
-from agent.context_builder import build_context
-from agent.prompt_templates import SYSTEM_PROMPT, build_user_prompt
+from agent.chat_handler import stream_agent_response
+from agent.prompt_templates import TOOL_SYSTEM_PROMPT
+from agent.tools import AGENT_TOOLS
 from api.deps import get_db
 from api.schemas import (
     ChatMessageListResponse,
@@ -103,19 +103,12 @@ async def chat(
     )
     history: list[ChatMessage] = list(history_result.scalars().all())
 
-    # 컨텍스트 빌드
-    context_yaml: str | None = await build_context(body.message, db)
-    context_report_count = 0
-    if context_yaml:
-        # yaml 블록 수 대략 산정 (- report_id: 등장 횟수)
-        context_report_count = context_yaml.count("report_id:")
-
-    # 유저 메시지 저장
+    # 유저 메시지 저장 (tool-use 모드에서는 context 없이 직접 저장)
     user_msg = ChatMessage(
         session_id=session_id,
         role="user",
         content=body.message,
-        context_report_count=context_report_count,
+        context_report_count=0,
     )
     db.add(user_msg)
     await db.commit()
@@ -127,10 +120,9 @@ async def chat(
     ]
     history_dicts = history_dicts[-MAX_HISTORY_MESSAGES:]
     messages: list[dict] = history_dicts + [
-        {"role": "user", "content": build_user_prompt(body.message, context_yaml)}
+        {"role": "user", "content": body.message}
     ]
 
-    provider = get_default_provider()
     model = settings.agent_model
 
     # ── sse_generator는 순수 데이터(messages, model, system)만 사용 ──
@@ -138,21 +130,29 @@ async def chat(
         """SSE 이벤트를 yield하며 완료 후 assistant 응답을 DB에 저장."""
         accumulated: list[str] = []
 
-        async for event in stream_to_sse(
-            provider=provider,
-            messages=messages,
-            model=model,
-            system=SYSTEM_PROMPT,
-        ):
-            # 텍스트 청크면 누적
-            if event.startswith("data: "):
-                try:
-                    payload = json.loads(event[6:])
-                    if payload.get("type") == "text":
-                        accumulated.append(payload.get("text", ""))
-                except (json.JSONDecodeError, KeyError):
-                    pass
-            yield event
+        async with AsyncSessionLocal() as tool_session:
+            async for event in stream_agent_response(
+                messages=messages,
+                model=model,
+                system=TOOL_SYSTEM_PROMPT,
+                tools=AGENT_TOOLS,
+                db_session=tool_session,
+            ):
+                # 텍스트/thinking 청크면 누적
+                # CRITICAL 4: also accumulate thinking events so that if the
+                # final turn produces no text (e.g. only thinking was emitted),
+                # the saved message is not empty and doesn't fall back to the
+                # error placeholder.
+                if event.startswith("data: "):
+                    try:
+                        payload = json.loads(event[6:])
+                        if payload.get("type") == "text":
+                            accumulated.append(payload.get("text", ""))
+                        elif payload.get("type") == "thinking":
+                            accumulated.append(payload.get("text", ""))
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                yield event
 
         # ── Fix #1: 오류 시에도 assistant placeholder 저장 ──
         # 응답 완료 후 assistant 메시지 저장 (별도 세션 사용 — Fix #3 유지)

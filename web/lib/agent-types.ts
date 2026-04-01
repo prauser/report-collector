@@ -28,7 +28,41 @@ export type SseErrorEvent = {
   message: string;
 };
 
-export type SseEvent = SseTextEvent | SseDoneEvent | SseErrorEvent;
+export type SseToolCallEvent = {
+  type: "tool_call";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+
+export type SseToolResultEvent = {
+  type: "tool_result";
+  id: string;
+  name: string;
+  summary: string;
+};
+
+export type SseThinkingEvent = {
+  type: "thinking";
+  text: string;
+};
+
+export type SseEvent =
+  | SseTextEvent
+  | SseDoneEvent
+  | SseErrorEvent
+  | SseToolCallEvent
+  | SseToolResultEvent
+  | SseThinkingEvent;
+
+// A single tool invocation tracked during a streaming response
+export interface ToolStep {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+  summary?: string;
+  status: "calling" | "done";
+}
 
 // Local UI message (may be partially streamed)
 export interface UiMessage {
@@ -36,4 +70,6 @@ export interface UiMessage {
   role: "user" | "assistant";
   content: string;
   streaming?: boolean;
+  thinking?: string[];
+  toolSteps?: ToolStep[];
 }

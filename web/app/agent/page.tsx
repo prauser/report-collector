@@ -163,23 +163,66 @@ export default function AgentPage() {
             )
           );
         } else if (event.type === "done") {
-          // Mark streaming as complete
+          // Mark streaming as complete; also close any orphaned "calling" tool steps
           setMessages((prev) =>
             prev.map((m) =>
-              m.id === assistantMsgId ? { ...m, streaming: false } : m
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    streaming: false,
+                    toolSteps: (m.toolSteps ?? []).map((step) =>
+                      step.status === "calling"
+                        ? { ...step, status: "done" as const }
+                        : step
+                    ),
+                  }
+                : m
+            )
+          );
+        } else if (event.type === "tool_call") {
+          const newStep = {
+            id: event.id,
+            name: event.name,
+            input: event.input,
+            status: "calling" as const,
+          };
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, toolSteps: [...(m.toolSteps ?? []), newStep] }
+                : m
+            )
+          );
+        } else if (event.type === "tool_result") {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantMsgId) return m;
+              const updatedSteps = (m.toolSteps ?? []).map((step) =>
+                step.id === event.id
+                  ? { ...step, summary: event.summary, status: "done" as const }
+                  : step
+              );
+              return { ...m, toolSteps: updatedSteps };
+            })
+          );
+        } else if (event.type === "thinking") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? { ...m, thinking: [...(m.thinking ?? []), event.text] }
+                : m
             )
           );
         } else if (event.type === "error") {
           const errMsg = event.message || "응답 중 오류가 발생했습니다.";
           setError(errMsg);
-          // Remove the empty assistant bubble or set error content on it
+          // Remove the empty assistant bubble or stop streaming on it (single update)
           setMessages((prev) =>
-            prev.filter((m) => m.id !== assistantMsgId || m.content !== "")
-          );
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsgId ? { ...m, streaming: false } : m
-            )
+            prev
+              .map((m) =>
+                m.id === assistantMsgId ? { ...m, streaming: false } : m
+              )
+              .filter((m) => m.id !== assistantMsgId || m.content !== "")
           );
         }
       }
