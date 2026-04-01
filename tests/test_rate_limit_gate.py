@@ -438,7 +438,7 @@ class TestChartDigitizerGateIntegration:
 
             with patch.object(mod._gemini_chart_gate, "wait", side_effect=tracking_wait), \
                  patch("parser.chart_digitizer.settings") as s, \
-                 patch("parser.key_data_extractor._get_gemini_client") as mock_genai_client:
+                 patch("parser.chart_digitizer._get_gemini_client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
 
@@ -571,7 +571,7 @@ class TestChartDigitizerGateIntegration:
 
             with patch.object(mod._gemini_chart_gate, "wait", side_effect=tracking_wait), \
                  patch("parser.chart_digitizer.settings") as s, \
-                 patch("parser.key_data_extractor._get_gemini_client") as mock_genai_client:
+                 patch("parser.chart_digitizer._get_gemini_client") as mock_genai_client:
                 s.gemini_api_key = "fake-key"
                 s.gemini_model = "gemini-test"
 
