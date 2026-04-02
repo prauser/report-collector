@@ -19,6 +19,8 @@ structlog.configure(
     wrapper_class=structlog.BoundLogger,
 )
 
+from utils.crash_logging import setup_crash_logging, install_asyncio_handler, mark_clean_exit
+
 from config.settings import settings
 # Phase 1: 메시지 수집 + PDF 다운로드만 (분석은 별도 실행)
 settings.analysis_enabled = False
@@ -180,8 +182,14 @@ async def run_retry_stage(args: argparse.Namespace):
 
 
 async def main(args: argparse.Namespace):
+    try:
+        install_asyncio_handler(asyncio.get_event_loop(), "run_backfill")
+    except RuntimeError:
+        pass
+
     if args.retry_stage:
         await run_retry_stage(args)
+        mark_clean_exit()
         return
 
     client = get_client()
@@ -221,6 +229,7 @@ async def main(args: argparse.Namespace):
 
     await client.disconnect()
     print("\n=== All done ===")
+    mark_clean_exit()
 
 
 def cli() -> argparse.Namespace:
@@ -261,4 +270,5 @@ def cli() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = cli()
+    setup_crash_logging(sentinel_name=".backfill_running", process_name="run_backfill")
     asyncio.run(main(args))

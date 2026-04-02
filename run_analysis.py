@@ -28,6 +28,8 @@ structlog.configure(
     wrapper_class=structlog.BoundLogger,
 )
 
+from utils.crash_logging import setup_crash_logging, install_asyncio_handler, mark_clean_exit
+
 from sqlalchemy import select, update as sa_update
 from sqlalchemy.exc import IntegrityError
 
@@ -51,6 +53,7 @@ log = structlog.get_logger(__name__)
 _REPORT_TIMEOUT = 1800  # 건당 최대 30분 (각 단계에 자체 timeout 있음)
 _CONCURRENCY = 4  # Phase 1 동시 처리 건수
 _BATCH_THRESHOLD = 100  # Layer2 Batch 제출 임계값
+_MAX_CONCURRENT_BATCHES = 3  # 동시에 폴링 중인 Batch 최대 수
 
 
 async def _get_unanalyzed_reports(limit: int) -> list[ReportModel]:
@@ -295,6 +298,12 @@ async def _submit_and_save_batch(layer2_inputs: dict, batch_num: int) -> int:
 
 
 async def main(args: argparse.Namespace) -> None:
+    # Install asyncio exception handler for fire-and-forget task failures
+    try:
+        install_asyncio_handler(asyncio.get_event_loop(), "run_analysis")
+    except RuntimeError:
+        pass
+
     limit = args.limit or 9999
 
     print(f"=== Run Analysis ===")
@@ -321,6 +330,7 @@ async def main(args: argparse.Namespace) -> None:
     # Phase 1 + 2 통합: PDF 분석 → N건 모이면 Layer2 Batch 제출 (streaming)
     concurrency = args.concurrency
     batch_threshold = args.batch_size
+    max_concurrent_batches = getattr(args, "max_batches", _MAX_CONCURRENT_BATCHES)
     print(f"\n>>> 분석 시작 ({len(reports)}건, 동시 {concurrency}건, 배치 {batch_threshold}건)")
     results: list[dict] = []
     done = 0
@@ -330,17 +340,35 @@ async def main(args: argparse.Namespace) -> None:
     # Layer2 버퍼: threshold 도달 시 batch 제출
     l2_buffer: dict[str, dict] = {}
 
+    # 비동기 batch 추적
+    _pending_batches: list[asyncio.Task] = []
+    _batch_semaphore = asyncio.Semaphore(max_concurrent_batches)
+
     async def _flush_buffer():
-        """버퍼에 쌓인 layer2_inputs를 batch 제출."""
-        nonlocal batch_num, total_saved
+        """버퍼에 쌓인 layer2_inputs를 asyncio.create_task()로 백그라운드 제출."""
+        nonlocal batch_num
         if not l2_buffer or not settings.anthropic_api_key:
             return
         batch_num += 1
-        # 버퍼 복사 후 비우기
+        # 버퍼 복사 후 비우기 — copy 후 clear이므로 race condition 없음
         to_submit = dict(l2_buffer)
         l2_buffer.clear()
-        n = await _submit_and_save_batch(to_submit, batch_num)
-        total_saved += n
+        current_batch_num = batch_num
+
+        async def _batch_task():
+            nonlocal total_saved
+            # 세마포어로 동시 batch 수 제한
+            async with _batch_semaphore:
+                try:
+                    n = await _submit_and_save_batch(to_submit, current_batch_num)
+                    # asyncio는 single-thread: await 사이에서만 switching
+                    # 따라서 total_saved += n 은 atomic하게 동작
+                    total_saved += n
+                except BaseException as e:
+                    log.error("batch_task_failed", batch_num=current_batch_num, error=str(e))
+
+        task = asyncio.create_task(_batch_task())
+        _pending_batches.append(task)
 
     queue: asyncio.Queue = asyncio.Queue()
     for report in reports:
@@ -394,6 +422,10 @@ async def main(args: argparse.Namespace) -> None:
     if l2_buffer:
         await _flush_buffer()
 
+    # 백그라운드 batch task 전부 완료 대기 (total_saved가 확정된 후 summary 출력)
+    if _pending_batches:
+        await asyncio.gather(*_pending_batches, return_exceptions=True)
+
     if not settings.anthropic_api_key and any("layer2_input" in r for r in results):
         l2_ready = sum(1 for r in results if "layer2_input" in r)
         print(f"\nAnthropic API key not set — {l2_ready}건 Layer2 미처리.")
@@ -402,6 +434,8 @@ async def main(args: argparse.Namespace) -> None:
     print(f"  Processed: {len(results)}")
     print(f"  Batches submitted: {batch_num}")
     print(f"  Layer2 saved: {total_saved}")
+
+    mark_clean_exit()
 
 
 def cli():
@@ -415,4 +449,5 @@ def cli():
 
 if __name__ == "__main__":
     args = cli()
+    setup_crash_logging(sentinel_name=".analysis_running", process_name="run_analysis")
     asyncio.run(main(args))
