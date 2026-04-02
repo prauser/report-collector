@@ -451,6 +451,25 @@ export interface SectorStockResponse {
   items: SectorStockItem[];
 }
 
+// ---------------------------------------------------------------------------
+// OHLCV / Chart types
+// ---------------------------------------------------------------------------
+
+export interface OhlcvResponse {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface SymbolOption {
+  symbol: string;
+  name: string | null;
+  count: number;
+}
+
 export const api = {
   agent: {
     getSessions: () =>
@@ -538,6 +557,14 @@ export const api = {
       patch<TradeResponse>(`/api/trades/${id}/reason`, { reason }),
     updateReview: (id: number, review: string) =>
       patch<TradeResponse>(`/api/trades/${id}/review`, { review }),
+    chartData: (symbol: string, dateFrom?: string, dateTo?: string) =>
+      clientFetch<TradeResponse[]>("/api/trades/chart-data", {
+        symbol,
+        date_from: dateFrom,
+        date_to: dateTo,
+      }),
+    symbols: () =>
+      clientFetch<SymbolOption[]>("/api/trades/symbols"),
     upload: async (file: File, broker?: string, dryRun?: boolean): Promise<TradeUploadResponse> => {
       const url = new URL(`${BASE}/api/trades/upload`);
       if (broker) url.searchParams.set("broker", broker);
@@ -578,6 +605,10 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision }),
       }).then((r) => r.json()),
+  },
+  ohlcv: {
+    get: (symbol: string, from?: string, to?: string) =>
+      clientFetch<OhlcvResponse[]>(`/api/ohlcv/${symbol}`, { from, to }),
   },
   stocks: {
     list: (params?: StockListParams) =>

@@ -32,6 +32,9 @@ export default function RootLayout({
             <Link href="/trades/review" className="text-sm text-gray-600 hover:text-gray-900">
               복기 현황
             </Link>
+            <Link href="/trades/chart" className="text-sm text-gray-600 hover:text-gray-900">
+              차트
+            </Link>
             <Link href="/trades/stats" className="text-sm text-gray-600 hover:text-gray-900">
               매매 통계
             </Link>

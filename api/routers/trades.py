@@ -305,6 +305,31 @@ async def list_trade_pairs(
 
 
 # ---------------------------------------------------------------------------
+# GET /trades/symbols — 종목 목록 (must be BEFORE /{trade_id})
+# ---------------------------------------------------------------------------
+
+@router.get("/symbols")
+async def list_symbols(
+    db: AsyncSession = Depends(get_db),
+):
+    """거래 내역에 있는 종목 목록 (symbol, name, count). 빈도 내림차순."""
+    from sqlalchemy import func as sa_func
+
+    stmt = (
+        sa_select(
+            Trade.symbol,
+            Trade.name,
+            sa_func.count(Trade.id).label("count"),
+        )
+        .group_by(Trade.symbol, Trade.name)
+        .order_by(sa_func.count(Trade.id).desc())
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+    return [{"symbol": r.symbol, "name": r.name, "count": r.count} for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # GET /trades/positions — 평균단가 포지션 (must be BEFORE /{trade_id})
 # ---------------------------------------------------------------------------
 

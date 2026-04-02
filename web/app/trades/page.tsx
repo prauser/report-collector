@@ -57,6 +57,12 @@ function TradesContent() {
         <h1 className="text-xl font-semibold text-gray-900">체결 내역</h1>
         <div className="flex items-center gap-3">
           <Link
+            href="/trades/chart"
+            className="text-sm text-blue-600 hover:underline"
+          >
+            차트 →
+          </Link>
+          <Link
             href="/trades/review"
             className="text-sm text-blue-600 hover:underline"
           >
