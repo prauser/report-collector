@@ -36,8 +36,23 @@ from sqlalchemy import select, update as sa_update, func
 
 log = structlog.get_logger(__name__)
 
-_BACKFILL_CONCURRENCY = 5  # 동시 처리 리포트 수
+_BACKFILL_CONCURRENCY = 20  # 전체 worker 수
+_TELEGRAM_CONCURRENCY = 5   # Telegram MTProto 동시 호출 (FloodWait 방지)
+_HTTP_PDF_CONCURRENCY = 25  # HTTP PDF 다운로드 동시 호출
+_S2A_CONCURRENCY = 15       # S2a(Haiku) 분류 동시 호출
 _SKIP_STATUSES = ("s2a_done", "pdf_done", "pdf_failed", "analysis_pending", "analysis_failed", "done")
+
+# Semaphores (event loop 안에서 초기화)
+_telegram_sem: asyncio.Semaphore | None = None
+_http_pdf_sem: asyncio.Semaphore | None = None
+_s2a_sem: asyncio.Semaphore | None = None
+
+
+def _init_semaphores():
+    global _telegram_sem, _http_pdf_sem, _s2a_sem
+    _telegram_sem = asyncio.Semaphore(_TELEGRAM_CONCURRENCY)
+    _http_pdf_sem = asyncio.Semaphore(_HTTP_PDF_CONCURRENCY)
+    _s2a_sem = asyncio.Semaphore(_S2A_CONCURRENCY)
 
 
 def _pdf_filename(message: Message) -> str | None:
@@ -86,11 +101,12 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
     channel_username = task.channel_username
     client = task.client
 
-    if parsed.report_date is None or parsed.report_date == date.today():
+    if parsed.report_date is None:
         parsed.report_date = message.date.date()
 
     # S2a: 분류
-    s2a = await classify_message(parsed)
+    async with _s2a_sem:
+        s2a = await classify_message(parsed)
 
     if s2a.message_type in ("news", "general"):
         return _ReportResult("skipped", message.id)
@@ -127,14 +143,16 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
 
         # 2) PDF 다운로드
         if task.pdf_fname and not report.pdf_path:
-            rel_path, size_kb = await download_telegram_document(client, message, report)
+            async with _telegram_sem:
+                rel_path, size_kb = await download_telegram_document(client, message, report)
             if rel_path:
                 await update_pdf_info(session, report.id, rel_path, size_kb, None)
                 report.pdf_path = rel_path
 
         # t.me 메시지 링크에서 PDF URL/document resolve
         if not report.pdf_url and not report.pdf_path and parsed.tme_message_links:
-            tme_url, tme_msg = await resolve_tme_links(client, parsed.tme_message_links)
+            async with _telegram_sem:
+                tme_url, tme_msg = await resolve_tme_links(client, parsed.tme_message_links)
             if tme_url:
                 report.pdf_url = tme_url
                 await session.execute(
@@ -142,13 +160,15 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
                     .values(pdf_url=tme_url)
                 )
             elif tme_msg:
-                rel_path, size_kb = await download_telegram_document(client, tme_msg, report)
+                async with _telegram_sem:
+                    rel_path, size_kb = await download_telegram_document(client, tme_msg, report)
                 if rel_path:
                     await update_pdf_info(session, report.id, rel_path, size_kb, None)
                     report.pdf_path = rel_path
 
         if report.pdf_url and not report.pdf_path:
-            rel_path, size_kb, fail_reason = await download_pdf(report)
+            async with _http_pdf_sem:
+                rel_path, size_kb, fail_reason = await download_pdf(report)
             if rel_path:
                 await update_pdf_info(session, report.id, rel_path, size_kb, None)
                 report.pdf_path = rel_path
@@ -196,7 +216,7 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
                             "report_type": _t(key_data.report_type, 50),
                             "title": _t(key_data.title, 500),
                             "report_date": parsed_date,
-                        }.items() if v
+                        }.items() if v is not None
                     }
                     if key_meta:
                         try:
@@ -257,6 +277,7 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
     reverse=True: 최신 메시지부터 → 과거로 (backward)
     Returns: 저장된 레코드 수
     """
+    _init_semaphores()
     client = get_client()
 
     async with AsyncSessionLocal() as session:
@@ -265,6 +286,12 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
         )
         min_id = channel_row.last_message_id if channel_row else 0
         reverse_min_id = channel_row.reverse_min_id if channel_row else None
+
+    # reverse 완료 체크: reverse 커서가 forward 커서 이하면 갭 없음
+    if reverse and reverse_min_id and min_id and reverse_min_id <= min_id:
+        log.info("reverse_complete", channel=channel_username,
+                 reverse_min_id=reverse_min_id, last_message_id=min_id)
+        return 0
 
     # 런 기록 생성
     run = BackfillRun(

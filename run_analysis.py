@@ -121,7 +121,7 @@ async def process_single(report: ReportModel) -> dict:
                     "report_type": _trunc(key_data.report_type, 50),
                     "title": _trunc(key_data.title, 500),
                     "report_date": parsed_date,
-                }.items() if v
+                }.items() if v is not None
             }
             if key_meta:
                 async with AsyncSessionLocal() as session:

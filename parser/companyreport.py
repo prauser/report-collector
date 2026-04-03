@@ -47,7 +47,7 @@ class CompanyReportParser(BaseParser):
             source_channel=channel,
             raw_text=text,
             source_message_id=message_id,
-            report_date=date.today(),
+            report_date=None,
         )
         result.title_normalized = normalize_title(title)
 

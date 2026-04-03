@@ -105,7 +105,7 @@ class RepostoryParser(BaseParser):
             source_channel=channel,
             raw_text=text,
             source_message_id=message_id,
-            report_date=date.today(),
+            report_date=None,
         )
 
         # 종목 리포트 패턴 시도
