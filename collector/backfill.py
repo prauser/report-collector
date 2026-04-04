@@ -382,7 +382,6 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
         # Phase 2: Queue + Worker 패턴 (타임아웃이 큐 대기 시간 제외)
         _TASK_TIMEOUT = 300  # 건당 최대 5분
         _CHECKPOINT_INTERVAL = 100  # N건마다 진행 위치 저장
-        results: list[_ReportResult | Exception] = []
         layer2_inputs: dict[str, _Layer2Input] = {}
         n_processed = 0
 
@@ -410,7 +409,7 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
                 log.warning("checkpoint_failed", channel=channel_username, error=str(e))
 
         async def _worker():
-            nonlocal n_processed
+            nonlocal n_processed, n_saved, n_pending, n_skipped
             while True:
                 try:
                     task = queue.get_nowait()
@@ -420,51 +419,49 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
                     result = await asyncio.wait_for(
                         _process_single_report(task), timeout=_TASK_TIMEOUT
                     )
-                    results.append(result)
+                    if result.action == "inserted":
+                        n_saved += 1
+                    elif result.action == "pending":
+                        n_pending += 1
+                    elif result.action in ("skipped", "error"):
+                        n_skipped += 1
                     if result.layer2_input:
                         cid = f"report-{result.layer2_input.report_id}"
                         layer2_inputs[cid] = result.layer2_input
                 except asyncio.TimeoutError:
                     log.warning("task_timeout", message_id=task.message.id, timeout=_TASK_TIMEOUT)
-                    results.append(_ReportResult("error", task.message.id))
+                    n_skipped += 1
                 except Exception as exc:
                     log.warning("backfill_task_error", error=str(exc), message_id=task.message.id)
-                    results.append(exc)
+                    n_skipped += 1
                 finally:
+                    task.message = None  # Telethon Message 객체 해제
+                    task.parsed = None
+                    task.client = None
                     queue.task_done()
                     n_processed += 1
                     if n_processed % _CHECKPOINT_INTERVAL == 0:
                         await _save_checkpoint()
 
-        queue = asyncio.Queue()
+        queue: asyncio.Queue[_ReportTask] = asyncio.Queue()
         for t in tasks:
             queue.put_nowait(t)
+        n_tasks = len(tasks)
+        tasks.clear()  # Phase 1 리스트 해제 — 이후 queue에서만 참조
 
-        num_workers = min(_BACKFILL_CONCURRENCY, len(tasks))
+        num_workers = min(_BACKFILL_CONCURRENCY, n_tasks)
         if num_workers > 0:
             workers = [asyncio.create_task(_worker()) for _ in range(num_workers)]
-            total_timeout = max(600, _TASK_TIMEOUT * len(tasks) // num_workers + 120)
+            total_timeout = max(600, _TASK_TIMEOUT * n_tasks // num_workers + 120)
             try:
                 await asyncio.wait_for(asyncio.gather(*workers), timeout=total_timeout)
             except asyncio.TimeoutError:
                 log.error("backfill_worker_total_timeout",
                           channel=channel_username, timeout=total_timeout,
-                          tasks=len(tasks), num_workers=num_workers)
+                          tasks=n_tasks, num_workers=num_workers)
                 for w in workers:
                     w.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
-
-        # 결과 집계
-        for r in results:
-            if isinstance(r, Exception):
-                log.warning("backfill_task_error", error=str(r))
-                continue
-            if r.action == "inserted":
-                n_saved += 1
-            elif r.action == "pending":
-                n_pending += 1
-            elif r.action in ("skipped", "error"):
-                n_skipped += 1
 
         # Phase 3: Batch API로 Layer2 일괄 추출 (50% 할인 + Prompt Caching)
         if layer2_inputs:
