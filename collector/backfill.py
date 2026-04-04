@@ -408,6 +408,8 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
             except Exception as e:
                 log.warning("checkpoint_failed", channel=channel_username, error=str(e))
 
+        _TASK_RETRIES = 2  # DB 커넥션 에러 시 재시도
+
         async def _worker():
             nonlocal n_processed, n_saved, n_pending, n_skipped
             while True:
@@ -415,33 +417,45 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
                     task = queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-                try:
-                    result = await asyncio.wait_for(
-                        _process_single_report(task), timeout=_TASK_TIMEOUT
-                    )
-                    if result.action == "inserted":
-                        n_saved += 1
-                    elif result.action == "pending":
-                        n_pending += 1
-                    elif result.action in ("skipped", "error"):
+                last_exc = None
+                for attempt in range(1, _TASK_RETRIES + 1):
+                    try:
+                        result = await asyncio.wait_for(
+                            _process_single_report(task), timeout=_TASK_TIMEOUT
+                        )
+                        if result.action == "inserted":
+                            n_saved += 1
+                        elif result.action == "pending":
+                            n_pending += 1
+                        elif result.action in ("skipped", "error"):
+                            n_skipped += 1
+                        if result.layer2_input:
+                            cid = f"report-{result.layer2_input.report_id}"
+                            layer2_inputs[cid] = result.layer2_input
+                        last_exc = None
+                        break
+                    except asyncio.TimeoutError:
+                        log.warning("task_timeout", message_id=task.message.id, timeout=_TASK_TIMEOUT)
                         n_skipped += 1
-                    if result.layer2_input:
-                        cid = f"report-{result.layer2_input.report_id}"
-                        layer2_inputs[cid] = result.layer2_input
-                except asyncio.TimeoutError:
-                    log.warning("task_timeout", message_id=task.message.id, timeout=_TASK_TIMEOUT)
+                        last_exc = None
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        if attempt < _TASK_RETRIES and "QueuePool" in str(exc):
+                            await asyncio.sleep(2)
+                        else:
+                            break
+                if last_exc is not None:
+                    log.warning("backfill_task_error", error=str(last_exc), message_id=task.message.id)
                     n_skipped += 1
-                except Exception as exc:
-                    log.warning("backfill_task_error", error=str(exc), message_id=task.message.id)
-                    n_skipped += 1
-                finally:
-                    task.message = None  # Telethon Message 객체 해제
-                    task.parsed = None
-                    task.client = None
-                    queue.task_done()
-                    n_processed += 1
-                    if n_processed % _CHECKPOINT_INTERVAL == 0:
-                        await _save_checkpoint()
+                # 메모리 해제 + checkpoint
+                task.message = None
+                task.parsed = None
+                task.client = None
+                queue.task_done()
+                n_processed += 1
+                if n_processed % _CHECKPOINT_INTERVAL == 0:
+                    await _save_checkpoint()
 
         queue: asyncio.Queue[_ReportTask] = asyncio.Queue()
         for t in tasks:
