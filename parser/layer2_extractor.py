@@ -10,8 +10,12 @@ Sonnet 1회 호출로 메타데이터 + 투자 논리 체인 + 연관 종목/섹
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import structlog
 from anthropic import AsyncAnthropic, RateLimitError, APIConnectionError
@@ -24,6 +28,50 @@ from db.models import calc_cost_usd
 from storage.llm_usage_repo import record_llm_usage
 
 log = structlog.get_logger(__name__)
+
+_PENDING_BATCHES_PATH = Path(__file__).parent.parent / "logs" / "pending_batches.jsonl"
+
+
+def _save_pending_batch(batch_id: str, custom_ids: list[str]) -> None:
+    """Append a JSONL line recording a submitted batch for crash recovery."""
+    try:
+        _PENDING_BATCHES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "batch_id": str(batch_id),
+            "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "count": len(custom_ids),
+            "custom_ids": [str(c) for c in custom_ids],
+        }
+        with open(_PENDING_BATCHES_PATH, "a", encoding="utf-8") as fp:
+            fp.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        log.warning("pending_batch_save_failed", batch_id=batch_id, error=str(e))
+
+
+def _remove_pending_batch(batch_id: str) -> None:
+    """Remove a batch_id entry from the pending batches file after successful completion."""
+    if not _PENDING_BATCHES_PATH.exists():
+        return
+    try:
+        lines = _PENDING_BATCHES_PATH.read_text(encoding="utf-8").splitlines()
+        kept = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            if entry.get("batch_id") != batch_id:
+                kept.append(line)
+        # Write back atomically via temp file + rename
+        tmp_path = _PENDING_BATCHES_PATH.with_suffix(".jsonl.tmp")
+        tmp_path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+        tmp_path.replace(_PENDING_BATCHES_PATH)
+    except OSError as e:
+        log.warning("pending_batch_remove_failed", batch_id=batch_id, error=str(e))
 
 _client: AsyncAnthropic | None = None
 
@@ -66,6 +114,10 @@ class Layer2Result:
     # 추출 품질
     extraction_quality: str = "medium"  # high / medium / low / truncated
 
+    # 분류 확신도 및 보조 분류
+    category_confidence: float = 1.0  # 0.0~1.0, 1.0=명확, 0.5 이하=경계 사례
+    secondary_category: str | None = None  # stock / industry / macro, 선택적
+
     # Markdown truncation 정보
     markdown_truncated: bool = False
     markdown_original_chars: int = 0
@@ -107,6 +159,17 @@ _EXTRACT_TOOL = {
                 "type": "string",
                 "enum": ["stock", "industry", "macro"],
                 "description": "리포트 분류",
+            },
+            "category_confidence": {
+                "type": "number",
+                "description": "분류 확신도. 1.0=명확, 0.5 이하=경계 사례",
+                "minimum": 0.0,
+                "maximum": 1.0,
+            },
+            "secondary_category": {
+                "type": ["string", "null"],
+                "enum": ["stock", "industry", "macro", None],
+                "description": "주 분류와 다른 관점이 있을 때. 없으면 null",
             },
             "meta": {
                 "type": "object",
@@ -265,7 +328,7 @@ _EXTRACT_TOOL = {
                 "description": "추출 품질 자체 평가. high=마크다운 풍부, medium=텍스트만, low=정보 부족",
             },
         },
-        "required": ["report_category", "meta", "thesis", "chain", "extraction_quality"],
+        "required": ["report_category", "category_confidence", "meta", "thesis", "chain", "extraction_quality"],
     },
 }
 
@@ -365,6 +428,7 @@ async def _submit_and_poll_batch(
     - failed_custom_ids: errored/expired 엔트리의 custom_id 목록
     """
     client = _get_client()
+    _batch_start = time.perf_counter()
 
     # 제출 retry (3회, 지수 백오프 5~60초)
     last_exc: Exception | None = None
@@ -386,6 +450,7 @@ async def _submit_and_poll_batch(
         raise last_exc  # type: ignore[misc]
 
     log.info("layer2_batch_submitted", batch_id=batch.id, count=len(requests))
+    _save_pending_batch(batch.id, [r["custom_id"] for r in requests])
 
     # 폴링
     while True:
@@ -405,7 +470,9 @@ async def _submit_and_poll_batch(
         succeeded=batch.request_counts.succeeded,
         errored=batch.request_counts.errored,
         expired=batch.request_counts.expired,
+        duration_s=round(time.perf_counter() - _batch_start, 2),
     )
+    _remove_pending_batch(batch.id)
 
     # 결과 수집
     results: dict[str, tuple[dict | None, int, int, int, int]] = {}
@@ -435,6 +502,39 @@ async def _submit_and_poll_batch(
             failed_ids.append(entry.custom_id)
 
     return results, failed_ids
+
+
+async def submit_layer2_batch(requests: list[Request]) -> str:
+    """제출만 하고 끝 (fire-and-forget). 폴링/결과수집 없음.
+
+    Returns: batch_id string
+    """
+    if not requests:
+        raise ValueError("requests must not be empty")
+
+    client = _get_client()
+
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            batch = await client.messages.batches.create(requests=requests)
+            break
+        except (RateLimitError, APIConnectionError) as e:
+            last_exc = e
+            wait = min(5 * (2 ** attempt), 60)
+            log.warning(
+                "layer2_batch_submit_retry",
+                attempt=attempt + 1,
+                wait_sec=wait,
+                error=str(e),
+            )
+            await asyncio.sleep(wait)
+    else:
+        raise last_exc  # type: ignore[misc]
+
+    _save_pending_batch(batch.id, [r["custom_id"] for r in requests])
+    log.info("layer2_batch_submitted", batch_id=batch.id, count=len(requests))
+    return batch.id
 
 
 async def run_layer2_batch(
@@ -503,6 +603,16 @@ def make_layer2_result(
     if "meta" in tool_input:
         analysis_data["meta"] = tool_input["meta"]
 
+    try:
+        category_confidence = float(tool_input.get("category_confidence", 1.0))
+    except (ValueError, TypeError):
+        category_confidence = 1.0
+    secondary_category = tool_input.get("secondary_category") or None
+
+    analysis_data["category_confidence"] = category_confidence
+    if secondary_category is not None:
+        analysis_data["secondary_category"] = secondary_category
+
     quality = tool_input.get("extraction_quality", "medium")
     if md_was_truncated:
         quality = "truncated"
@@ -515,6 +625,8 @@ def make_layer2_result(
         sector_mentions=tool_input.get("sector_mentions", []),
         keywords=tool_input.get("keywords", []),
         extraction_quality=quality,
+        category_confidence=category_confidence,
+        secondary_category=secondary_category,
         markdown_truncated=md_was_truncated,
         markdown_original_chars=md_original_chars,
         llm_model=model,
