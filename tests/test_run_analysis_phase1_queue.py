@@ -28,7 +28,7 @@ def _db_mocks():
 
 
 def _make_args(concurrency: int = 2, limit: int = 0, dry_run: bool = False) -> argparse.Namespace:
-    return argparse.Namespace(concurrency=concurrency, limit=limit, dry_run=dry_run, batch_size=100)
+    return argparse.Namespace(concurrency=concurrency, limit=limit, dry_run=dry_run, batch_size=100, enable_charts=False, disable_charts=False)
 
 
 def _make_report(report_id: int) -> MagicMock:
@@ -104,7 +104,7 @@ class TestPhase1AllResultsCollected:
     async def test_all_successes_collected(self):
         reports = [_make_report(i) for i in range(1, 4)]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return {"report_id": report.id, "status": "ok", "steps": {"markdown": "ok"}}
 
         printed = await _run_phase1(reports, fake_process, concurrency=2)
@@ -118,7 +118,7 @@ class TestPhase1AllResultsCollected:
         reports = [_make_report(i) for i in range(1, 4)]
         call_count = [0]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             call_count[0] += 1
             if report.id == 2:
                 raise ValueError("boom")
@@ -133,7 +133,7 @@ class TestPhase1AllResultsCollected:
         """A TimeoutError in process_single still produces a result and is counted."""
         reports = [_make_report(i) for i in range(1, 3)]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             if report.id == 1:
                 raise asyncio.TimeoutError()
             return {"report_id": report.id, "status": "ok", "steps": {}}
@@ -147,7 +147,7 @@ class TestPhase1AllResultsCollected:
         """Mix of ok/error/timeout: all 5 end up counted."""
         reports = [_make_report(i) for i in range(1, 6)]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             if report.id == 1:
                 raise asyncio.TimeoutError()
             if report.id == 2:
@@ -170,7 +170,7 @@ class TestPhase1WorkerPattern:
         active = [0]
         peak_active = [0]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             active[0] += 1
             peak_active[0] = max(peak_active[0], active[0])
             await asyncio.sleep(0.01)  # yield to allow other workers
@@ -187,7 +187,7 @@ class TestPhase1WorkerPattern:
         reports = [_make_report(i) for i in range(1, n + 1)]
         processed_ids = []
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             processed_ids.append(report.id)
             return {"report_id": report.id, "status": "ok", "steps": {}}
 
@@ -220,7 +220,7 @@ class TestPhase1ResultShape:
         reports = [_make_report(1)]
         seen_statuses = []
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             raise asyncio.TimeoutError()
 
         # We need to inspect the results list; intercept via patching
@@ -260,7 +260,7 @@ class TestPhase1ResultShape:
         """An exception produces {"status": "error: <msg>"}."""
         reports = [_make_report(1)]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             raise ValueError("something broke")
 
         async def fake_get(_limit):
@@ -297,7 +297,7 @@ class TestPhase1ProgressLogging:
         reports = [_make_report(1), _make_report(2)]
         call_count = [0]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise asyncio.TimeoutError()
@@ -338,7 +338,7 @@ class TestPhase1ProgressLogging:
         """An exception also triggers a log.info("analyzed", ...) call."""
         reports = [_make_report(5)]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             raise RuntimeError("db error")
 
         async def fake_get(_limit):
@@ -380,7 +380,7 @@ class TestPhase1SingleWorkerConcurrency:
         reports = [_make_report(i) for i in range(1, 5)]
         order = []
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             order.append(("start", report.id))
             await asyncio.sleep(0)
             order.append(("end", report.id))

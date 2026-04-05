@@ -34,6 +34,8 @@ def _make_args(
         limit=limit,
         dry_run=dry_run,
         batch_size=batch_size,
+        enable_charts=False,
+        disable_charts=False,
     )
 
 
@@ -90,10 +92,10 @@ def _base_patches(anthropic_key="fake-anthropic", batch_side_effect=None):
     Returns a list of (patch_target, kwargs) tuples.
 
     batch_side_effect: side_effect for _submit_and_save_batch AsyncMock.
-                       Defaults to returning 1 (saved 1 item).
+                       Defaults to returning a batch_id string.
     """
     if batch_side_effect is None:
-        batch_side_effect = AsyncMock(return_value=1)
+        batch_side_effect = AsyncMock(return_value="msgbatch_fake")
 
     sess = _mock_session()
     return (
@@ -137,7 +139,7 @@ class TestFlushBufferCreatesTask:
             await batch_can_finish.wait()  # blocks until we explicitly allow it
             return len(inputs)
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             result = _make_l2_result(report.id)
             if report.id == 2:
                 # Record whether the batch was still blocked at this point
@@ -197,7 +199,7 @@ class TestFlushBufferCreatesTask:
             submit_call_count[0] += 1
             return len(inputs)
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         sess = _mock_session()
@@ -224,23 +226,21 @@ class TestFlushBufferCreatesTask:
 # Test: total_saved is accurate after gather
 # ---------------------------------------------------------------------------
 
-class TestTotalSavedAfterGather:
-    """total_saved must reflect all batch results after all tasks complete."""
+class TestSubmittedBatchIdsAfterGather:
+    """submitted_batch_ids must reflect all successfully submitted batches."""
 
     @pytest.mark.asyncio
-    async def test_total_saved_sums_all_batches(self):
-        """When multiple batches are submitted, total_saved = sum of all n values."""
+    async def test_submitted_batch_ids_listed_in_summary(self):
+        """When multiple batches are submitted, each batch_id appears in summary output."""
         n_reports = 6
         reports = [_make_report(i) for i in range(1, n_reports + 1)]
-        save_counts = [2, 2, 2]  # 3 batches of 2 each
-        save_idx = [0]
+        batch_idx = [0]
 
         async def fake_submit(inputs, batch_num):
-            idx = save_idx[0]
-            save_idx[0] += 1
-            return save_counts[idx] if idx < len(save_counts) else 0
+            batch_idx[0] += 1
+            return f"msgbatch_00{batch_idx[0]}"
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         printed = []
@@ -260,15 +260,20 @@ class TestTotalSavedAfterGather:
             from run_analysis import main
             await main(args)
 
-        saved_line = next((l for l in printed if "Layer2 saved" in l), "")
-        assert "Layer2 saved: 6" in saved_line, f"Expected 6, got: {saved_line!r}"
+        batches_line = next((l for l in printed if "Batches submitted" in l), "")
+        assert "Batches submitted: 3" in batches_line, f"Expected 3, got: {batches_line!r}"
+        # Each batch ID should appear in output
+        all_output = "\n".join(printed)
+        assert "msgbatch_001" in all_output
+        assert "msgbatch_002" in all_output
+        assert "msgbatch_003" in all_output
 
     @pytest.mark.asyncio
-    async def test_total_saved_zero_when_no_anthropic_key(self):
-        """If anthropic_api_key is None, no batches are submitted → total_saved=0."""
+    async def test_no_batches_submitted_when_no_anthropic_key(self):
+        """If anthropic_api_key is None, no batches are submitted."""
         reports = [_make_report(i) for i in range(1, 4)]
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         printed = []
@@ -286,18 +291,18 @@ class TestTotalSavedAfterGather:
             from run_analysis import main
             await main(args)
 
-        saved_line = next((l for l in printed if "Layer2 saved" in l), "")
-        assert "Layer2 saved: 0" in saved_line
+        batches_line = next((l for l in printed if "Batches submitted" in l), "")
+        assert "Batches submitted: 0" in batches_line
 
     @pytest.mark.asyncio
-    async def test_total_saved_residual_buffer_counted(self):
-        """Reports that don't fill a full batch (residual buffer) are still counted."""
+    async def test_residual_buffer_submitted_as_batch(self):
+        """Reports that don't fill a full batch (residual buffer) are submitted."""
         reports = [_make_report(i) for i in range(1, 4)]  # 3 reports
 
         async def fake_submit(inputs, batch_num):
-            return len(inputs)  # returns 3 for the residual batch
+            return "msgbatch_residual"
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         printed = []
@@ -317,8 +322,8 @@ class TestTotalSavedAfterGather:
             from run_analysis import main
             await main(args)
 
-        saved_line = next((l for l in printed if "Layer2 saved" in l), "")
-        assert "Layer2 saved: 3" in saved_line
+        all_output = "\n".join(printed)
+        assert "msgbatch_residual" in all_output
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +345,7 @@ class TestBatchTaskErrorIsolation:
                 raise RuntimeError("Batch API error")
             return len(inputs)
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         sess = _mock_session()
@@ -367,7 +372,7 @@ class TestBatchTaskErrorIsolation:
         async def fake_submit(inputs, batch_num):
             raise ValueError("batch exploded")
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         sess = _mock_session()
@@ -393,7 +398,7 @@ class TestBatchTaskErrorIsolation:
 
     @pytest.mark.asyncio
     async def test_second_batch_succeeds_after_first_fails(self):
-        """Even if batch 1 fails, batch 2 should still save its results."""
+        """Even if batch 1 fails, batch 2 should still submit successfully."""
         reports = [_make_report(i) for i in range(1, 3)]
         call_count = [0]
 
@@ -401,9 +406,9 @@ class TestBatchTaskErrorIsolation:
             call_count[0] += 1
             if call_count[0] == 1:
                 raise RuntimeError("first batch error")
-            return 1  # second batch saves 1
+            return "msgbatch_second_ok"  # second batch submits ok
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         printed = []
@@ -424,9 +429,9 @@ class TestBatchTaskErrorIsolation:
             from run_analysis import main
             await main(args)
 
-        saved_line = next((l for l in printed if "Layer2 saved" in l), "")
-        # First batch fails (0 saved), second succeeds (1 saved) → total = 1
-        assert "Layer2 saved: 1" in saved_line
+        all_output = "\n".join(printed)
+        # Second batch submitted successfully → its ID in output
+        assert "msgbatch_second_ok" in all_output
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +450,7 @@ class TestFlushBufferNoTaskWhenSkipped:
             submit_call_count[0] += 1
             return 1
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         sess = _mock_session()
@@ -475,7 +480,7 @@ class TestFlushBufferNoTaskWhenSkipped:
             submit_call_count[0] += 1
             return 0
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_no_l2_result(report.id)
 
         sess = _mock_session()
@@ -512,7 +517,7 @@ class TestBufferCopyClear:
             submitted_batches.append(set(inputs.keys()))
             return len(inputs)
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         sess = _mock_session()
@@ -562,7 +567,7 @@ class TestBatchSemaphore:
             active[0] -= 1
             return len(inputs)
 
-        async def fake_process(report):
+        async def fake_process(report, **kwargs):
             return _make_l2_result(report.id)
 
         sess = _mock_session()
