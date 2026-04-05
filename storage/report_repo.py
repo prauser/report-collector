@@ -68,7 +68,7 @@ async def upsert_report(session: AsyncSession, parsed: ParsedReport) -> tuple[Re
     ).returning(Report, literal_column("(xmax = 0)").label("was_inserted"))
 
     result = await session.execute(stmt)
-    await session.commit()
+    await session.flush()
     pair = result.one_or_none()
 
     if pair is None:
@@ -110,7 +110,7 @@ async def mark_pdf_failed(session: AsyncSession, report_id: int, reason: str = "
     await session.execute(
         update(Report).where(Report.id == report_id).values(
             pdf_download_failed=True,
-            pdf_fail_reason=reason[:50],
+            pdf_fail_reason=reason[:500],
             pdf_fail_retryable=retryable,
             pipeline_status="pdf_failed",
         )
@@ -130,5 +130,3 @@ async def update_pdf_info(
         .where(Report.id == report_id)
         .values(pdf_path=pdf_path, pdf_size_kb=pdf_size_kb, page_count=page_count)
     )
-
-

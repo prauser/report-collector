@@ -178,10 +178,7 @@ async def test_listener_extracts_pdf_fname_when_text_and_pdf():
          patch("collector.listener.classify_message", new_callable=AsyncMock) as mock_s2a, \
          patch("collector.listener.upsert_report", new_callable=AsyncMock, return_value=(mock_report, "inserted")), \
          patch("collector.listener.update_pipeline_status", new_callable=AsyncMock), \
-         patch("collector.listener.download_telegram_document", new_callable=AsyncMock, return_value=("path/to.pdf", 120)), \
-         patch("collector.listener.update_pdf_info", new_callable=AsyncMock), \
-         patch("collector.listener.download_pdf", new_callable=AsyncMock, return_value=(None, None, None)), \
-         patch("collector.listener.mark_pdf_failed", new_callable=AsyncMock), \
+         patch("collector.listener.attempt_pdf_download", new_callable=AsyncMock, return_value=(True, "path/to.pdf", 100, None, None)), \
          patch("collector.listener.AsyncSessionLocal", session_ctx), \
          patch("collector.listener.get_client") as mock_get_client, \
          patch("collector.listener.assess_parse_quality", return_value="good"), \
@@ -206,8 +203,6 @@ async def test_listener_extracts_pdf_fname_when_text_and_pdf():
         from collector.listener import handle_new_message
         await handle_new_message(event)
 
-    from collector.listener import download_telegram_document
-    # download_telegram_document is called when pdf_fname is set and report has no pdf_path
     import collector.listener as listener_mod
     # We verify the flow ran to completion (no exception, report processed)
     assert mock_parse.called

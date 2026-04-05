@@ -39,6 +39,15 @@ web/.env.local
 # Claude Code
 .claude/
 
+# 로그/캐시
+*.log
+logs/markdown_failures.csv
+logs/pending_batches.jsonl
+backfill_dates_cache.json
+target_batches.txt
+.analysis_running
+scripts/output/
+
 # 임시 파일
 HANDOFF.md
 TASK_RESULT.md

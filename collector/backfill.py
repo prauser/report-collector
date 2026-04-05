@@ -8,7 +8,7 @@ import structlog
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from telethon.errors import FloodWaitError
-from telethon.tl.types import Message, MessageMediaDocument, DocumentAttributeFilename
+from telethon.tl.types import Message
 
 from collector.telegram_client import get_client
 from config.settings import settings
@@ -27,45 +27,26 @@ from parser.layer2_extractor import (
 )
 from storage.llm_usage_repo import record_llm_usage
 from storage.pending_repo import save_pending
-from storage.pdf_archiver import download_telegram_document, download_pdf, resolve_tme_links
+from storage.pdf_archiver import attempt_pdf_download, pdf_filename as _pdf_filename_shared
 from sqlalchemy.exc import IntegrityError
-from storage.report_repo import update_pdf_info, mark_pdf_failed, upsert_report, update_pipeline_status
-from storage.analysis_repo import save_markdown, save_analysis, log_analysis_failure
-from collector.listener import _apply_layer2_meta
+from storage.report_repo import upsert_report, update_pipeline_status
+from storage.analysis_repo import save_analysis, log_analysis_failure
+from parser.meta_updater import apply_layer2_meta
 from sqlalchemy import select, update as sa_update, func
 
 log = structlog.get_logger(__name__)
 
-_BACKFILL_CONCURRENCY = 20  # 전체 worker 수
-_TELEGRAM_CONCURRENCY = 5   # Telegram MTProto 동시 호출 (FloodWait 방지)
-_HTTP_PDF_CONCURRENCY = 25  # HTTP PDF 다운로드 동시 호출
-_S2A_CONCURRENCY = 15       # S2a(Haiku) 분류 동시 호출
+_BACKFILL_CONCURRENCY = 5  # 동시 처리 리포트 수
 _SKIP_STATUSES = ("s2a_done", "pdf_done", "pdf_failed", "analysis_pending", "analysis_failed", "done")
-
-# Semaphores (event loop 안에서 초기화)
-_telegram_sem: asyncio.Semaphore | None = None
-_http_pdf_sem: asyncio.Semaphore | None = None
-_s2a_sem: asyncio.Semaphore | None = None
-
-
-def _init_semaphores():
-    global _telegram_sem, _http_pdf_sem, _s2a_sem
-    _telegram_sem = asyncio.Semaphore(_TELEGRAM_CONCURRENCY)
-    _http_pdf_sem = asyncio.Semaphore(_HTTP_PDF_CONCURRENCY)
-    _s2a_sem = asyncio.Semaphore(_S2A_CONCURRENCY)
 
 
 def _pdf_filename(message: Message) -> str | None:
-    """Document 타입 PDF 메시지에서 파일명 추출. PDF가 아니면 None."""
-    if not isinstance(message.media, MessageMediaDocument):
-        return None
-    doc = message.media.document
-    if "pdf" not in getattr(doc, "mime_type", ""):
-        return None
-    for attr in doc.attributes or []:
-        if isinstance(attr, DocumentAttributeFilename):
-            return attr.file_name
-    return None
+    """Document 타입 PDF 메시지에서 파일명 추출. PDF가 아니면 None.
+
+    Delegates to storage.pdf_archiver.pdf_filename (shared implementation).
+    Kept here for backward compatibility — callers may import from collector.backfill.
+    """
+    return _pdf_filename_shared(message)
 
 
 @dataclass
@@ -101,12 +82,11 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
     channel_username = task.channel_username
     client = task.client
 
-    if parsed.report_date is None:
+    if parsed.report_date is None or parsed.report_date == date.today():
         parsed.report_date = message.date.date()
 
     # S2a: 분류
-    async with _s2a_sem:
-        s2a = await classify_message(parsed)
+    s2a = await classify_message(parsed)
 
     if s2a.message_type in ("news", "general"):
         return _ReportResult("skipped", message.id)
@@ -141,43 +121,26 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
         # S2a 완료 후 상태 기록 (upsert 이후 report.id 사용 가능)
         await update_pipeline_status(session, report.id, "s2a_done")
 
-        # 2) PDF 다운로드
-        if task.pdf_fname and not report.pdf_path:
-            async with _telegram_sem:
-                rel_path, size_kb = await download_telegram_document(client, message, report)
-            if rel_path:
-                await update_pdf_info(session, report.id, rel_path, size_kb, None)
-                report.pdf_path = rel_path
-
-        # t.me 메시지 링크에서 PDF URL/document resolve
-        if not report.pdf_url and not report.pdf_path and parsed.tme_message_links:
-            async with _telegram_sem:
-                tme_url, tme_msg = await resolve_tme_links(client, parsed.tme_message_links)
-            if tme_url:
-                report.pdf_url = tme_url
-                await session.execute(
-                    sa_update(ReportModel).where(ReportModel.id == report.id)
-                    .values(pdf_url=tme_url)
-                )
-            elif tme_msg:
-                async with _telegram_sem:
-                    rel_path, size_kb = await download_telegram_document(client, tme_msg, report)
-                if rel_path:
-                    await update_pdf_info(session, report.id, rel_path, size_kb, None)
-                    report.pdf_path = rel_path
-
-        if report.pdf_url and not report.pdf_path:
-            async with _http_pdf_sem:
-                rel_path, size_kb, fail_reason = await download_pdf(report)
-            if rel_path:
-                await update_pdf_info(session, report.id, rel_path, size_kb, None)
-                report.pdf_path = rel_path
-                await update_pipeline_status(session, report.id, "pdf_done")
-            else:
-                await mark_pdf_failed(session, report.id, fail_reason or "unknown")
-        elif report.pdf_path:
-            # PDF가 이미 있는 경우 (telegram document 다운로드 완료)
+        # 2) PDF 다운로드 (3-stage fallback: Telegram doc → t.me resolve → HTTP)
+        if report.pdf_path:
+            # PDF가 이미 있는 경우 → pdf_done 상태만 업데이트
             await update_pipeline_status(session, report.id, "pdf_done")
+        else:
+            # Stage 1 대상: pdf_fname이 있을 때만 원본 메시지에서 직접 다운로드
+            tg_message = message if task.pdf_fname else None
+            tme_links = parsed.tme_message_links if parsed.tme_message_links else None
+
+            # 다운로드 소스가 있을 때만 attempt_pdf_download 호출 (no_source 내부 commit 방지)
+            if tg_message is not None or tme_links or report.pdf_url:
+                success, rel_path, _size_kb, _fail_reason, _retryable = await attempt_pdf_download(
+                    client=client,
+                    report=report,
+                    message=tg_message,
+                    tme_links=tme_links,
+                    session=session,
+                )
+                if success:
+                    report.pdf_path = rel_path
 
         # 이미 분석된 리포트는 Layer2 skip
         already_analyzed = await session.scalar(
@@ -188,9 +151,10 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
             return _ReportResult(action, message.id)
 
         # 3) 키 데이터 추출 + Markdown 변환 + 이미지 추출
+        #    analysis_enabled=False 일 때는 분석 단계 전부 스킵
         markdown_text = None
         chart_texts: list[str] | None = None
-        if report.pdf_path:
+        if settings.analysis_enabled and report.pdf_path:
             abs_path = settings.pdf_base_path / report.pdf_path
             if abs_path.exists():
                 # ③ 키 데이터 추출 (첫 페이지만, Flash-Lite)
@@ -216,7 +180,7 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
                             "report_type": _t(key_data.report_type, 50),
                             "title": _t(key_data.title, 500),
                             "report_date": parsed_date,
-                        }.items() if v is not None
+                        }.items() if v
                     }
                     if key_meta:
                         try:
@@ -230,8 +194,6 @@ async def _process_single_report(task: _ReportTask) -> _ReportResult:
                             log.debug("key_meta_update_skipped", report_id=report.id)
 
                 markdown_text, converter_name = await convert_pdf_to_markdown(abs_path)
-                if markdown_text:
-                    await save_markdown(session, report.id, markdown_text, converter_name)
 
                 # ② 차트/테이블 이미지 분리 → ④ Gemini 수치화
                 # Gemini 키가 없으면 이미지 추출도 스킵 (수치화 불가 시 추출 자체가 낭비)
@@ -277,7 +239,6 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
     reverse=True: 최신 메시지부터 → 과거로 (backward)
     Returns: 저장된 레코드 수
     """
-    _init_semaphores()
     client = get_client()
 
     async with AsyncSessionLocal() as session:
@@ -286,12 +247,6 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
         )
         min_id = channel_row.last_message_id if channel_row else 0
         reverse_min_id = channel_row.reverse_min_id if channel_row else None
-
-    # reverse 완료 체크: reverse 커서가 forward 커서 이하면 갭 없음
-    if reverse and reverse_min_id and min_id and reverse_min_id <= min_id:
-        log.info("reverse_complete", channel=channel_username,
-                 reverse_min_id=reverse_min_id, last_message_id=min_id)
-        return 0
 
     # 런 기록 생성
     run = BackfillRun(
@@ -348,7 +303,7 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
 
             text = message.text or ""
             pdf_fname = _pdf_filename(message)  # 항상 체크
-            if not text:
+            if not text.strip():
                 if not pdf_fname:
                     continue
                 text = pdf_fname
@@ -382,6 +337,7 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
         # Phase 2: Queue + Worker 패턴 (타임아웃이 큐 대기 시간 제외)
         _TASK_TIMEOUT = 300  # 건당 최대 5분
         _CHECKPOINT_INTERVAL = 100  # N건마다 진행 위치 저장
+        results: list[_ReportResult | Exception] = []
         layer2_inputs: dict[str, _Layer2Input] = {}
         n_processed = 0
 
@@ -408,74 +364,62 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
             except Exception as e:
                 log.warning("checkpoint_failed", channel=channel_username, error=str(e))
 
-        _TASK_RETRIES = 2  # DB 커넥션 에러 시 재시도
-
         async def _worker():
-            nonlocal n_processed, n_saved, n_pending, n_skipped
+            nonlocal n_processed
             while True:
                 try:
                     task = queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-                last_exc = None
-                for attempt in range(1, _TASK_RETRIES + 1):
-                    try:
-                        result = await asyncio.wait_for(
-                            _process_single_report(task), timeout=_TASK_TIMEOUT
-                        )
-                        if result.action == "inserted":
-                            n_saved += 1
-                        elif result.action == "pending":
-                            n_pending += 1
-                        elif result.action in ("skipped", "error"):
-                            n_skipped += 1
-                        if result.layer2_input:
-                            cid = f"report-{result.layer2_input.report_id}"
-                            layer2_inputs[cid] = result.layer2_input
-                        last_exc = None
-                        break
-                    except asyncio.TimeoutError:
-                        log.warning("task_timeout", message_id=task.message.id, timeout=_TASK_TIMEOUT)
-                        n_skipped += 1
-                        last_exc = None
-                        break
-                    except Exception as exc:
-                        last_exc = exc
-                        if attempt < _TASK_RETRIES and "QueuePool" in str(exc):
-                            await asyncio.sleep(2)
-                        else:
-                            break
-                if last_exc is not None:
-                    log.warning("backfill_task_error", error=str(last_exc), message_id=task.message.id)
-                    n_skipped += 1
-                # 메모리 해제 + checkpoint
-                task.message = None
-                task.parsed = None
-                task.client = None
-                queue.task_done()
-                n_processed += 1
-                if n_processed % _CHECKPOINT_INTERVAL == 0:
-                    await _save_checkpoint()
+                try:
+                    result = await asyncio.wait_for(
+                        _process_single_report(task), timeout=_TASK_TIMEOUT
+                    )
+                    results.append(result)
+                    if result.layer2_input:
+                        cid = f"report-{result.layer2_input.report_id}"
+                        layer2_inputs[cid] = result.layer2_input
+                except asyncio.TimeoutError:
+                    log.warning("task_timeout", message_id=task.message.id, timeout=_TASK_TIMEOUT)
+                    results.append(_ReportResult("error", task.message.id))
+                except Exception as exc:
+                    log.warning("backfill_task_error", error=str(exc), message_id=task.message.id)
+                    results.append(exc)
+                finally:
+                    queue.task_done()
+                    n_processed += 1
+                    if n_processed % _CHECKPOINT_INTERVAL == 0:
+                        await _save_checkpoint()
 
-        queue: asyncio.Queue[_ReportTask] = asyncio.Queue()
+        queue = asyncio.Queue()
         for t in tasks:
             queue.put_nowait(t)
-        n_tasks = len(tasks)
-        tasks.clear()  # Phase 1 리스트 해제 — 이후 queue에서만 참조
 
-        num_workers = min(_BACKFILL_CONCURRENCY, n_tasks)
+        num_workers = min(_BACKFILL_CONCURRENCY, len(tasks))
         if num_workers > 0:
             workers = [asyncio.create_task(_worker()) for _ in range(num_workers)]
-            total_timeout = max(600, _TASK_TIMEOUT * n_tasks // num_workers + 120)
+            total_timeout = max(600, _TASK_TIMEOUT * len(tasks) // num_workers + 120)
             try:
                 await asyncio.wait_for(asyncio.gather(*workers), timeout=total_timeout)
             except asyncio.TimeoutError:
                 log.error("backfill_worker_total_timeout",
                           channel=channel_username, timeout=total_timeout,
-                          tasks=n_tasks, num_workers=num_workers)
+                          tasks=len(tasks), num_workers=num_workers)
                 for w in workers:
                     w.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
+
+        # 결과 집계
+        for r in results:
+            if isinstance(r, Exception):
+                log.warning("backfill_task_error", error=str(r))
+                continue
+            if r.action == "inserted":
+                n_saved += 1
+            elif r.action == "pending":
+                n_pending += 1
+            elif r.action in ("skipped", "error"):
+                n_skipped += 1
 
         # Phase 3: Batch API로 Layer2 일괄 추출 (50% 할인 + Prompt Caching)
         if layer2_inputs:
@@ -523,7 +467,7 @@ async def backfill_channel(channel_username: str, limit: int | None = None, reve
                     report = await session.get(ReportModel, inp.report_id)
                     if not report:
                         continue
-                    meta_updates = _apply_layer2_meta(report, layer2.meta)
+                    meta_updates = apply_layer2_meta(report, layer2.meta)
                     if meta_updates:
                         try:
                             async with session.begin_nested():

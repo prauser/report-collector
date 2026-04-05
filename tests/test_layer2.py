@@ -216,7 +216,7 @@ class TestLayer2Result:
 class TestApplyLayer2Meta:
 
     def test_applies_meta_updates(self):
-        from collector.listener import _apply_layer2_meta
+        from parser.meta_updater import apply_layer2_meta
 
         report = MagicMock()
         meta = {
@@ -225,7 +225,7 @@ class TestApplyLayer2Meta:
             "opinion": "Buy",
             "target_price": 90000,
         }
-        updates = _apply_layer2_meta(report, meta)
+        updates = apply_layer2_meta(report, meta)
 
         assert updates["broker"] == "KB증권"
         assert updates["stock_name"] == "삼성전자"
@@ -233,21 +233,21 @@ class TestApplyLayer2Meta:
         assert updates["target_price"] == 90000
 
     def test_empty_meta_returns_empty(self):
-        from collector.listener import _apply_layer2_meta
+        from parser.meta_updater import apply_layer2_meta
 
-        updates = _apply_layer2_meta(MagicMock(), {})
+        updates = apply_layer2_meta(MagicMock(), {})
         assert updates == {}
 
     def test_none_meta_returns_empty(self):
-        from collector.listener import _apply_layer2_meta
+        from parser.meta_updater import apply_layer2_meta
 
-        updates = _apply_layer2_meta(MagicMock(), None)
+        updates = apply_layer2_meta(MagicMock(), None)
         assert updates == {}
 
     def test_string_price_parsed(self):
-        from collector.listener import _apply_layer2_meta
+        from parser.meta_updater import apply_layer2_meta
 
-        updates = _apply_layer2_meta(MagicMock(), {"target_price": "85,000원"})
+        updates = apply_layer2_meta(MagicMock(), {"target_price": "85,000원"})
         assert updates["target_price"] == 85000
 
 

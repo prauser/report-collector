@@ -90,8 +90,8 @@ async def process_report(report: Report) -> bool:
             await save_markdown(session, report.id, markdown_text, converter_name)
 
         # 메타데이터 보강
-        from collector.listener import _apply_layer2_meta
-        meta_updates = _apply_layer2_meta(report, layer2.meta)
+        from parser.meta_updater import apply_layer2_meta
+        meta_updates = apply_layer2_meta(report, layer2.meta)
         if meta_updates:
             await session.execute(
                 sa_update(Report)

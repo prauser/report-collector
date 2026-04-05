@@ -34,7 +34,7 @@ structlog.configure(
     wrapper_class=structlog.BoundLogger,
 )
 
-from sqlalchemy import select, func, update as sa_update
+from sqlalchemy import select, func
 from telethon.tl.types import MessageMediaDocument
 
 from collector.telegram_client import get_client
@@ -42,12 +42,18 @@ from config.settings import settings
 from db.session import AsyncSessionLocal
 from db.models import Report as ReportModel
 from parser.generic import PATTERN_TME_MSG
-from storage.pdf_archiver import download_telegram_document, download_pdf, resolve_tme_links
+from storage.pdf_archiver import (
+    download_telegram_document,
+    resolve_tme_links,
+    download_pdf,
+)
 from storage.report_repo import update_pdf_info, mark_pdf_failed, update_pipeline_status
 
 log = structlog.get_logger(__name__)
 
 _CONCURRENCY = 5
+_TELEGRAM_SEM_LIMIT = 5
+_telegram_sem = asyncio.Semaphore(_TELEGRAM_SEM_LIMIT)
 
 
 def _has_pdf_attachment(message) -> bool:
@@ -96,73 +102,74 @@ async def _process_report(client, report: ReportModel) -> tuple[str, str | None]
       result_code: 'telegram_ok' | 'tme_ok' | 'url_ok' | 'no_source' | 'fail'
       fail_detail: 실패 시 상세 사유
     """
-    attempts = []  # 시도 기록
-
-    # --- 1단계: Telegram 첨부파일 직접 다운로드 ---
+    # --- 1단계: 원본 Telegram 메시지 조회 (_telegram_sem 안에서) ---
+    message = None
+    prefetch_error = None
     if report.source_message_id and report.source_channel:
         try:
-            message = await client.get_messages(
-                report.source_channel,
-                ids=report.source_message_id,
-            )
+            async with _telegram_sem:
+                message = await client.get_messages(
+                    report.source_channel,
+                    ids=report.source_message_id,
+                )
         except Exception as e:
-            attempts.append(f"telegram_get_msg: {e}")
+            prefetch_error = f"telegram_get_msg: {e}"
+
+        # PDF 첨부가 없는 메시지는 Stage 1 대상 제외
+        if message and not _has_pdf_attachment(message):
             message = None
 
-        if message and _has_pdf_attachment(message):
-            rel_path, size_kb = await download_telegram_document(client, message, report)
+    # Stage 1: Telegram 첨부파일 직접 다운로드
+    if message is not None:
+        try:
+            async with _telegram_sem:
+                rel_path, size_kb = await download_telegram_document(client, message, report)
             if rel_path:
                 await _update_success(report.id, rel_path, size_kb)
                 return "telegram_ok", None
-            attempts.append("telegram_download: failed")
-        elif message:
-            attempts.append("telegram: no_pdf_attachment")
-        else:
-            attempts.append("telegram: message_not_found")
+        except Exception as e:
+            prefetch_error = (prefetch_error + " | " if prefetch_error else "") + f"telegram_doc: {e}"
 
-    # --- 2단계: raw_text에서 t.me 링크 → resolve ---
     tme_links = _extract_tme_links(report.raw_text)
-    if tme_links and not report.pdf_url:
+
+    # Stage 2: t.me link resolution
+    if tme_links and not report.pdf_url and not report.pdf_path:
         try:
-            tme_url, tme_msg = await resolve_tme_links(client, tme_links)
-            if tme_url:
-                # URL 발견 → pdf_url에 저장하고 3단계에서 다운로드
-                async with AsyncSessionLocal() as session:
-                    await session.execute(
-                        sa_update(ReportModel).where(ReportModel.id == report.id)
-                        .values(pdf_url=tme_url)
-                    )
-                    await session.commit()
-                report.pdf_url = tme_url
-            elif tme_msg:
-                # t.me가 document를 가리킴 → 직접 다운로드
-                rel_path, size_kb = await download_telegram_document(client, tme_msg, report)
+            async with _telegram_sem:
+                tme_url, tme_msg = await resolve_tme_links(client, tme_links)
+            if tme_msg:
+                async with _telegram_sem:
+                    rel_path, size_kb = await download_telegram_document(client, tme_msg, report)
                 if rel_path:
                     await _update_success(report.id, rel_path, size_kb)
                     return "tme_ok", None
-                attempts.append("tme_document: download_failed")
-            else:
-                attempts.append(f"tme_resolve: no_result ({len(tme_links)} links)")
+            elif tme_url:
+                report.pdf_url = tme_url
+                # Fall through to Stage 3
         except Exception as e:
-            attempts.append(f"tme_resolve: {e}")
+            prefetch_error = (prefetch_error + " | " if prefetch_error else "") + f"tme_resolve: {e}"
 
-    # --- 3단계: pdf_url로 HTTP 다운로드 ---
-    if report.pdf_url:
-        rel_path, size_kb, fail_reason = await download_pdf(report)
-        if rel_path:
-            await _update_success(report.id, rel_path, size_kb)
-            return "url_ok", None
-        attempts.append(f"url_download: {fail_reason}")
+    # Stage 3: HTTP download from pdf_url (no _telegram_sem)
+    if report.pdf_url and not report.pdf_path:
+        try:
+            rel_path, size_kb, fail_reason = await download_pdf(report)
+            if rel_path:
+                await _update_success(report.id, rel_path, size_kb)
+                return "url_ok", None
+        except Exception as e:
+            fail_reason = str(e)
 
-    # --- 모두 실패 ---
-    if not report.source_message_id and not report.pdf_url and not tme_links:
+    # All stages failed
+    if not message and not tme_links and not report.pdf_url:
+        if prefetch_error:
+            await _update_fail(report.id, prefetch_error[:500])
+            return "fail", prefetch_error
         await _update_fail(report.id, "no_source")
         return "no_source", None
 
-    fail_detail = " | ".join(attempts) if attempts else "unknown"
-    await _update_fail(report.id, fail_detail[:500])
-
-    return "fail", fail_detail
+    detail = prefetch_error or "unknown"
+    await _update_fail(report.id, detail[:500])
+    return "fail", detail
 
 
 async def main(args: argparse.Namespace):
