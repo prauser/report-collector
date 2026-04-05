@@ -10,7 +10,7 @@ import asyncio
 import re
 from enum import Enum
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 import aiofiles
 import aiohttp
@@ -42,6 +42,7 @@ class UrlType(str, Enum):
 
 
 _SHORT_DOMAINS = {"bit.ly", "tinyurl.com", "goo.gl", "is.gd", "t.co", "buly.kr", "naver.me"}
+_REDIRECT_DOMAINS = {"stockinfo7.com", "www.stockinfo7.com"}
 _UNSUPPORTED_DOMAINS = {"t.me"}
 _GDRIVE_PATTERN = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
 
@@ -72,7 +73,7 @@ def detect_url_type(url: str) -> UrlType:
     host = parsed.hostname or ""
     if host in _UNSUPPORTED_DOMAINS:
         return UrlType.UNSUPPORTED
-    if host in _SHORT_DOMAINS:
+    if host in _SHORT_DOMAINS or host in _REDIRECT_DOMAINS:
         return UrlType.SHORT_URL
     if "drive.google.com" in host:
         return UrlType.GOOGLE_DRIVE
@@ -130,18 +131,43 @@ async def _gdrive_download(session: aiohttp.ClientSession, url: str) -> bytes | 
     return None
 
 
+def _extract_viewer_pdf_url(url: str) -> str | None:
+    """Google Docs Viewer 등 wrapper URL에서 실제 PDF URL 추출.
+
+    docs.google.com/viewer?url=https://...pdf → 내부 url 파라미터 반환
+    """
+    parsed = urlparse(url)
+    if "docs.google.com" in (parsed.hostname or "") and "/viewer" in parsed.path:
+        qs = parse_qs(parsed.query)
+        pdf_urls = qs.get("url")
+        if pdf_urls:
+            return pdf_urls[0]
+    return None
+
+
 async def _resolve_short_url(session: aiohttp.ClientSession, url: str) -> str | None:
-    """단축 URL 리다이렉트 추적 → 최종 URL 반환."""
+    """단축 URL 리다이렉트 추적 → 최종 URL 반환.
+
+    Google Docs Viewer로 리다이렉트되면 내부 PDF URL을 추출.
+    """
+    resolved = None
     try:
         async with session.head(url, allow_redirects=True, timeout=REDIRECT_TIMEOUT) as resp:
-            return str(resp.url)
+            resolved = str(resp.url)
     except Exception:
         # HEAD 거부하는 서버 fallback
         try:
             async with session.get(url, allow_redirects=True, timeout=REDIRECT_TIMEOUT) as resp:
-                return str(resp.url)
+                resolved = str(resp.url)
         except Exception:
             return None
+
+    if resolved:
+        pdf_url = _extract_viewer_pdf_url(resolved)
+        if pdf_url:
+            log.info("viewer_pdf_extracted", original=url, viewer=resolved, pdf_url=pdf_url)
+            return pdf_url
+    return resolved
 
 
 # ──────────────────────────────────────────────
