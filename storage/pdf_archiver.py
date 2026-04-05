@@ -10,7 +10,7 @@ import asyncio
 import re
 from enum import Enum
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 import aiofiles
 import aiohttp
@@ -25,6 +25,9 @@ MAX_FILENAME_LEN = 80
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=60)
 REDIRECT_TIMEOUT = aiohttp.ClientTimeout(total=15)
 _TELEGRAM_DOWNLOAD_TIMEOUT = 120
+_DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+}
 
 
 # ──────────────────────────────────────────────
@@ -39,7 +42,6 @@ class UrlType(str, Enum):
 
 
 _SHORT_DOMAINS = {"bit.ly", "tinyurl.com", "goo.gl", "is.gd", "t.co", "buly.kr", "naver.me"}
-_REDIRECT_DOMAINS = {"stockinfo7.com", "www.stockinfo7.com"}  # 302 → Google Viewer 등
 _UNSUPPORTED_DOMAINS = {"t.me"}
 _GDRIVE_PATTERN = re.compile(r"/file/d/([a-zA-Z0-9_-]+)")
 
@@ -70,7 +72,7 @@ def detect_url_type(url: str) -> UrlType:
     host = parsed.hostname or ""
     if host in _UNSUPPORTED_DOMAINS:
         return UrlType.UNSUPPORTED
-    if host in _SHORT_DOMAINS or host in _REDIRECT_DOMAINS:
+    if host in _SHORT_DOMAINS:
         return UrlType.SHORT_URL
     if "drive.google.com" in host:
         return UrlType.GOOGLE_DRIVE
@@ -128,44 +130,18 @@ async def _gdrive_download(session: aiohttp.ClientSession, url: str) -> bytes | 
     return None
 
 
-def _extract_viewer_pdf_url(url: str) -> str | None:
-    """Google Docs Viewer 등 wrapper URL에서 실제 PDF URL 추출.
-
-    docs.google.com/viewer?url=https://...pdf → 내부 url 파라미터 반환
-    """
-    parsed = urlparse(url)
-    if "docs.google.com" in (parsed.hostname or "") and "/viewer" in parsed.path:
-        qs = parse_qs(parsed.query)
-        pdf_urls = qs.get("url")
-        if pdf_urls:
-            return pdf_urls[0]
-    return None
-
-
 async def _resolve_short_url(session: aiohttp.ClientSession, url: str) -> str | None:
-    """단축 URL 리다이렉트 추적 → 최종 URL 반환.
-
-    Google Docs Viewer로 리다이렉트되면 내부 PDF URL을 추출.
-    """
-    resolved = None
+    """단축 URL 리다이렉트 추적 → 최종 URL 반환."""
     try:
         async with session.head(url, allow_redirects=True, timeout=REDIRECT_TIMEOUT) as resp:
-            resolved = str(resp.url)
+            return str(resp.url)
     except Exception:
         # HEAD 거부하는 서버 fallback
         try:
             async with session.get(url, allow_redirects=True, timeout=REDIRECT_TIMEOUT) as resp:
-                resolved = str(resp.url)
+                return str(resp.url)
         except Exception:
             return None
-
-    if resolved:
-        # Google Docs Viewer → 실제 PDF URL 추출
-        pdf_url = _extract_viewer_pdf_url(resolved)
-        if pdf_url:
-            log.info("viewer_pdf_extracted", original=url, viewer=resolved, pdf_url=pdf_url)
-            return pdf_url
-    return resolved
 
 
 # ──────────────────────────────────────────────
@@ -228,7 +204,7 @@ async def download_pdf(report: Report) -> tuple[str | None, int | None, str | No
     abs_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        async with aiohttp.ClientSession(timeout=DOWNLOAD_TIMEOUT) as session:
+        async with aiohttp.ClientSession(timeout=DOWNLOAD_TIMEOUT, headers=_DEFAULT_HEADERS) as session:
             download_url = url
 
             # 단축 URL → 리다이렉트 추적
@@ -415,3 +391,162 @@ async def download_and_archive(report: Report, session) -> bool:
     await update_pdf_info(session, report.id, rel_path, size_kb, page_count)
     await session.commit()
     return True
+
+
+# ──────────────────────────────────────────────
+# PDF 파일명 헬퍼 (listener/backfill 공유)
+# ──────────────────────────────────────────────
+
+def pdf_filename(message) -> str | None:
+    """Document 타입 PDF 메시지에서 파일명 추출. PDF가 아니면 None.
+
+    telethon MessageMediaDocument + DocumentAttributeFilename 기반.
+    listener.py, backfill.py에서 공통으로 사용.
+    """
+    try:
+        from telethon.tl.types import MessageMediaDocument, DocumentAttributeFilename
+    except ImportError:
+        return None
+    if not isinstance(message.media, MessageMediaDocument):
+        return None
+    doc = message.media.document
+    if "pdf" not in getattr(doc, "mime_type", ""):
+        return None
+    for attr in doc.attributes or []:
+        if isinstance(attr, DocumentAttributeFilename):
+            return attr.file_name
+    return None
+
+
+# ──────────────────────────────────────────────
+# 3-stage PDF fallback orchestration
+# ──────────────────────────────────────────────
+
+async def attempt_pdf_download(
+    client,
+    report: Report,
+    message=None,
+    tme_links: list[str] | None = None,
+    session=None,
+    telegram_sem=None,
+    http_sem=None,
+) -> tuple[bool, str | None, int | None, str | None, bool | None]:
+    """3-stage PDF fallback: Telegram doc → t.me resolve → HTTP download.
+
+    Stage 1: If `message` is provided (or report.source_message_id allows fetching),
+             try Telegram document download directly.
+    Stage 2: If tme_links provided, resolve t.me links → PDF URL or document.
+    Stage 3: HTTP download from report.pdf_url.
+
+    Args:
+        client: Telethon client
+        report: Report ORM object (needs .pdf_url, .source_message_id, etc.)
+        message: Optional original Telethon message object (for Stage 1 direct download)
+        tme_links: Optional list of t.me message link strings (for Stage 2)
+        session: Optional SQLAlchemy async session (if provided, DB updates are done inside)
+        telegram_sem: Optional asyncio.Semaphore for throttling Telegram calls (None = no limit)
+        http_sem: Optional asyncio.Semaphore for throttling HTTP calls (None = no limit)
+
+    Returns:
+        (success, pdf_path_or_none, size_kb_or_none, fail_reason_or_none, fail_retryable_or_none)
+        On success: (True, rel_path, size_kb, None, None)
+        On failure: (False, None, None, reason_str, is_retryable_bool)
+    """
+    from storage.report_repo import update_pdf_info, mark_pdf_failed, update_pipeline_status
+
+    attempts = []
+    any_permanent = False  # tracks if any stage had a permanent (non-retryable) failure
+
+    async def _do_telegram_download(msg, label="telegram"):
+        """Attempt telegram document download, respecting telegram_sem."""
+        if telegram_sem is not None:
+            async with telegram_sem:
+                return await download_telegram_document(client, msg, report)
+        else:
+            return await download_telegram_document(client, msg, report)
+
+    async def _do_http_download():
+        """Attempt HTTP download, respecting http_sem."""
+        if http_sem is not None:
+            async with http_sem:
+                return await download_pdf(report)
+        else:
+            return await download_pdf(report)
+
+    # --- Stage 1: Direct Telegram document (original message) ---
+    if message is not None:
+        rel_path, size_kb = await _do_telegram_download(message)
+        if rel_path:
+            if session is not None:
+                await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                await update_pipeline_status(session, report.id, "pdf_done")
+                await session.commit()
+            return True, rel_path, size_kb, None, None
+        attempts.append("telegram_doc: download_failed")
+
+    # --- Stage 2: t.me link resolution ---
+    if tme_links and not report.pdf_url and not report.pdf_path:
+        try:
+            if telegram_sem is not None:
+                async with telegram_sem:
+                    tme_url, tme_msg = await resolve_tme_links(client, tme_links)
+            else:
+                tme_url, tme_msg = await resolve_tme_links(client, tme_links)
+
+            if tme_url:
+                # Update pdf_url on report object and (optionally) in DB
+                report.pdf_url = tme_url
+                if session is not None:
+                    from sqlalchemy import update as sa_update
+                    from db.models import Report as ReportModel
+                    await session.execute(
+                        sa_update(ReportModel).where(ReportModel.id == report.id)
+                        .values(pdf_url=tme_url)
+                    )
+                # Fall through to Stage 3
+            elif tme_msg:
+                rel_path, size_kb = await _do_telegram_download(tme_msg, "tme_doc")
+                if rel_path:
+                    if session is not None:
+                        await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                        await update_pipeline_status(session, report.id, "pdf_done")
+                        await session.commit()
+                    return True, rel_path, size_kb, None, None
+                attempts.append("tme_document: download_failed")
+            else:
+                attempts.append(f"tme_resolve: no_result ({len(tme_links)} links)")
+        except Exception as e:
+            attempts.append(f"tme_resolve: {e}")
+
+    # --- Stage 3: HTTP download from pdf_url ---
+    if report.pdf_url and not report.pdf_path:
+        rel_path, size_kb, fail_reason = await _do_http_download()
+        if rel_path:
+            if session is not None:
+                await update_pdf_info(session, report.id, rel_path, size_kb, None)
+                await update_pipeline_status(session, report.id, "pdf_done")
+                await session.commit()
+            return True, rel_path, size_kb, None, None
+        if fail_reason and not is_retryable_failure(fail_reason):
+            any_permanent = True
+        attempts.append(f"url_download: {fail_reason}")
+
+    # --- All stages failed ---
+    if not message and not (tme_links) and not report.pdf_url:
+        reason = "no_source"
+        retryable = False
+        if session is not None:
+            await mark_pdf_failed(session, report.id, reason)
+            await session.commit()
+        return False, None, None, reason, retryable
+
+    fail_detail = " | ".join(attempts) if attempts else "unknown"
+    fail_detail = fail_detail[:500]
+    # If any individual stage had a permanent failure, the overall result is non-retryable
+    retryable = not any_permanent and is_retryable_failure(fail_detail)
+
+    if session is not None:
+        await mark_pdf_failed(session, report.id, fail_detail)
+        await session.commit()
+
+    return False, None, None, fail_detail, retryable
