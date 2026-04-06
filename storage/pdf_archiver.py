@@ -131,6 +131,42 @@ async def _gdrive_download(session: aiohttp.ClientSession, url: str) -> bytes | 
     return None
 
 
+_PDF_URL_RE = re.compile(r'https?://[^\s"\'<>]+\.pdf[^\s"\'<>]*', re.IGNORECASE)
+_REPORT_URL_RE = re.compile(r'/stock/report/url/(\d+)')
+
+
+def _extract_pdf_from_html(content: bytes, source_url: str) -> str | None:
+    """HTML 응답에서 PDF 직접 URL을 추출. 없으면 None.
+
+    우선순위:
+    1. .pdf 확장자 URL (직접 다운로드 가능)
+    2. /stock/report/url/XXXXX → stockinfo7 리다이렉트 URL로 변환
+    """
+    try:
+        html = content.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    # 1) 직접 PDF URL
+    for m in _PDF_URL_RE.finditer(html):
+        url = m.group(0)
+        # Google Viewer wrapper 안의 PDF URL도 추출
+        viewer_pdf = _extract_viewer_pdf_url(url)
+        if viewer_pdf:
+            return viewer_pdf
+        # CDN/정적파일 PDF는 직접 반환
+        parsed = urlparse(url)
+        if parsed.hostname and parsed.hostname not in _UNSUPPORTED_DOMAINS:
+            return url
+
+    # 2) stockinfo7 report URL → 첫 번째 것으로 재시도
+    report_match = _REPORT_URL_RE.search(html)
+    if report_match:
+        return f"https://stockinfo7.com/stock/report/url/{report_match.group(1)}"
+
+    return None
+
+
 def _extract_viewer_pdf_url(url: str) -> str | None:
     """Google Docs Viewer 등 wrapper URL에서 실제 PDF URL 추출.
 
@@ -268,6 +304,20 @@ async def download_pdf(report: Report) -> tuple[str | None, int | None, str | No
             # PDF magic bytes 검증
             if not content.startswith(b"%PDF"):
                 ct = resp.headers.get("Content-Type", "")
+                # HTML fallback: PDF 링크를 추출해서 재시도
+                if "text/html" in ct:
+                    fallback_url = _extract_pdf_from_html(content, download_url)
+                    if fallback_url:
+                        log.info("html_fallback_pdf", original=download_url, extracted=fallback_url)
+                        async with session.get(fallback_url) as resp2:
+                            if resp2.status < 400:
+                                content2 = await resp2.read()
+                                if content2.startswith(b"%PDF"):
+                                    async with aiofiles.open(abs_path, "wb") as f:
+                                        await f.write(content2)
+                                    size_kb = len(content2) // 1024
+                                    log.info("pdf_downloaded", path=str(rel_path), size_kb=size_kb, url_type="html_fallback")
+                                    return str(rel_path), size_kb, None
                 log.warning(
                     "pdf_invalid_content",
                     url=download_url,
