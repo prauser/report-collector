@@ -144,6 +144,10 @@ async def _check_and_recover_batch(client, batch_id: str, apply: bool) -> dict:
         summary["error"] = str(e)
         return summary
 
+    # 결과를 먼저 수집
+    succeeded_entries = []  # (report_id, layer2, in_tok, out_tok, cc_tok, cr_tok)
+    failed_ids = []
+
     async for entry in results_iter:
         cid = entry.custom_id
 
@@ -156,13 +160,9 @@ async def _check_and_recover_batch(client, batch_id: str, apply: bool) -> dict:
 
         if entry.result.type != "succeeded":
             summary["report_ids_failed"].append(report_id)
-            if apply:
-                async with AsyncSessionLocal() as session:
-                    await update_pipeline_status(session, report_id, "analysis_failed")
-                    await session.commit()
+            failed_ids.append(report_id)
             continue
 
-        # Succeeded entry
         summary["report_ids_succeeded"].append(report_id)
 
         msg = entry.result.message
@@ -172,7 +172,6 @@ async def _check_and_recover_batch(client, batch_id: str, apply: bool) -> dict:
         cc_tok = usage.cache_creation_input_tokens
         cr_tok = usage.cache_read_input_tokens
 
-        # tool_input 추출
         tool_input = None
         for block in msg.content:
             if block.type == "tool_use" and block.name == "extract_layer2":
@@ -185,6 +184,44 @@ async def _check_and_recover_batch(client, batch_id: str, apply: bool) -> dict:
             is_batch=True,
         )
         if not layer2:
+            continue
+
+        succeeded_entries.append((report_id, layer2, in_tok, out_tok, cc_tok, cr_tok))
+
+    # 실패 건 일괄 처리
+    if apply and failed_ids:
+        async with AsyncSessionLocal() as session:
+            for rid in failed_ids:
+                await update_pipeline_status(session, rid, "analysis_failed")
+            await session.commit()
+
+    if not succeeded_entries:
+        return summary
+
+    # IN 쿼리로 한번에 필터링
+    candidate_ids = [rid for rid, *_ in succeeded_entries]
+
+    async with AsyncSessionLocal() as session:
+        existing_result = await session.execute(
+            select(ReportAnalysis.report_id).where(
+                ReportAnalysis.report_id.in_(candidate_ids)
+            )
+        )
+        existing_ids = {row[0] for row in existing_result}
+
+        reports_result = await session.execute(
+            select(ReportModel).where(ReportModel.id.in_(candidate_ids))
+        )
+        reports_map = {r.id: r for (r,) in reports_result}
+
+    # 저장 대상만 건별 처리
+    for report_id, layer2, in_tok, out_tok, cc_tok, cr_tok in succeeded_entries:
+        if report_id in existing_ids:
+            continue
+
+        report = reports_map.get(report_id)
+        if not report:
+            log.warning("recover_report_not_found", report_id=report_id)
             continue
 
         await record_llm_usage(
@@ -204,10 +241,6 @@ async def _check_and_recover_batch(client, batch_id: str, apply: bool) -> dict:
 
         async with AsyncSessionLocal() as session:
             report = await session.get(ReportModel, report_id)
-            if not report:
-                log.warning("recover_report_not_found", report_id=report_id)
-                continue
-
             meta_updates = _apply_layer2_meta(report, layer2.meta)
             if meta_updates:
                 try:
@@ -253,7 +286,7 @@ async def _recover_all_batches(client, apply: bool) -> None:
     for batch in eligible:
         batch_id = batch.batch_id if hasattr(batch, "batch_id") else batch.id
 
-        # 2) 결과 스트리밍
+        # 2) 결과 스트리밍 — 먼저 전부 메모리에 수집
         try:
             results_iter = await client.messages.batches.results(batch_id)
         except Exception as e:
@@ -261,12 +294,9 @@ async def _recover_all_batches(client, apply: bool) -> None:
             total_errors += 1
             continue
 
-        batch_saved = 0
-        batch_would_save = 0
-        batch_already_exists = 0
-        batch_wrong_status = 0
-
-        async for entry in results_iter:
+        # 배치 결과를 먼저 모아서 layer2 변환
+        candidates: list[tuple[int, object]] = []  # (report_id, layer2)
+        for entry in results_iter:
             if entry.result.type != "succeeded":
                 continue
 
@@ -276,7 +306,6 @@ async def _recover_all_batches(client, apply: bool) -> None:
 
             report_id = int(cid[len("report-"):])
 
-            # tool_input 추출
             msg = entry.result.message
             usage = msg.usage
             in_tok = usage.input_tokens
@@ -298,37 +327,66 @@ async def _recover_all_batches(client, apply: bool) -> None:
             if not layer2:
                 continue
 
-            async with AsyncSessionLocal() as session:
-                exists = await _analysis_exists(session, report_id)
-                if exists:
-                    batch_already_exists += 1
-                    continue
+            candidates.append((report_id, layer2))
 
-                report = await session.get(ReportModel, report_id)
-                if not report:
-                    continue
+        if not candidates:
+            continue
 
-                if report.pipeline_status != "analysis_pending":
-                    batch_wrong_status += 1
-                    continue
+        # 3) IN 쿼리로 한번에 필터링
+        candidate_ids = [rid for rid, _ in candidates]
 
-                if not apply:
-                    batch_would_save += 1
-                    continue
-
-                # Apply mode: save
-                await record_llm_usage(
-                    model=settings.llm_pdf_model,
-                    purpose="layer2_batch",
-                    input_tokens=in_tok,
-                    output_tokens=out_tok,
-                    cache_creation_tokens=cc_tok,
-                    cache_read_tokens=cr_tok,
-                    is_batch=True,
-                    source_channel=None,
-                    report_id=report_id,
+        async with AsyncSessionLocal() as session:
+            # 이미 분석 존재하는 report_id set
+            existing_result = await session.execute(
+                select(ReportAnalysis.report_id).where(
+                    ReportAnalysis.report_id.in_(candidate_ids)
                 )
+            )
+            existing_ids = {row[0] for row in existing_result}
 
+            # report 정보 일괄 조회 (pipeline_status 포함)
+            reports_result = await session.execute(
+                select(ReportModel).where(ReportModel.id.in_(candidate_ids))
+            )
+            reports_map = {r.id: r for (r,) in reports_result}
+
+        batch_saved = 0
+        batch_would_save = 0
+        batch_already_exists = 0
+        batch_wrong_status = 0
+
+        for report_id, layer2 in candidates:
+            if report_id in existing_ids:
+                batch_already_exists += 1
+                continue
+
+            report = reports_map.get(report_id)
+            if not report:
+                continue
+
+            if report.pipeline_status != "analysis_pending":
+                batch_wrong_status += 1
+                continue
+
+            if not apply:
+                batch_would_save += 1
+                continue
+
+            # Apply mode: save (건별 세션 — save_analysis가 commit 필요)
+            await record_llm_usage(
+                model=settings.llm_pdf_model,
+                purpose="layer2_batch",
+                input_tokens=layer2.input_tokens,
+                output_tokens=layer2.output_tokens,
+                cache_creation_tokens=0,
+                cache_read_tokens=0,
+                is_batch=True,
+                source_channel=None,
+                report_id=report_id,
+            )
+
+            async with AsyncSessionLocal() as session:
+                report = await session.get(ReportModel, report_id)
                 meta_updates = _apply_layer2_meta(report, layer2.meta)
                 if meta_updates:
                     try:

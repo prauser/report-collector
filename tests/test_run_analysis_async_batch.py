@@ -148,7 +148,8 @@ class TestFlushBufferCreatesTask:
             return result
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -203,7 +204,8 @@ class TestFlushBufferCreatesTask:
             return _make_l2_result(report.id)
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -245,7 +247,8 @@ class TestSubmittedBatchIdsAfterGather:
 
         printed = []
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -278,7 +281,8 @@ class TestSubmittedBatchIdsAfterGather:
 
         printed = []
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -307,7 +311,8 @@ class TestSubmittedBatchIdsAfterGather:
 
         printed = []
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -349,7 +354,8 @@ class TestBatchTaskErrorIsolation:
             return _make_l2_result(report.id)
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -376,7 +382,8 @@ class TestBatchTaskErrorIsolation:
             return _make_l2_result(report.id)
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -413,7 +420,8 @@ class TestBatchTaskErrorIsolation:
 
         printed = []
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -454,7 +462,8 @@ class TestFlushBufferNoTaskWhenSkipped:
             return _make_l2_result(report.id)
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -484,7 +493,8 @@ class TestFlushBufferNoTaskWhenSkipped:
             return _make_no_l2_result(report.id)
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -521,7 +531,8 @@ class TestBufferCopyClear:
             return _make_l2_result(report.id)
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -571,7 +582,8 @@ class TestBatchSemaphore:
             return _make_l2_result(report.id)
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -589,3 +601,276 @@ class TestBatchSemaphore:
         assert peak_active[0] <= _MAX_CONCURRENT_BATCHES, (
             f"Peak concurrent batches {peak_active[0]} exceeded limit {_MAX_CONCURRENT_BATCHES}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test: --dump-layer2 mode
+# ---------------------------------------------------------------------------
+
+class TestDumpLayer2Mode:
+    """Tests for the --dump-layer2 flag in run_analysis.main()."""
+
+    def _make_dump_args(
+        self,
+        dump_path: str,
+        concurrency: int = 2,
+        limit: int = 0,
+        batch_size: int = 100,
+    ) -> argparse.Namespace:
+        return argparse.Namespace(
+            concurrency=concurrency,
+            limit=limit,
+            dry_run=False,
+            batch_size=batch_size,
+            enable_charts=False,
+            disable_charts=False,
+            dump_layer2=True,
+            dump_layer2_path=dump_path,
+        )
+
+    @pytest.mark.asyncio
+    async def test_dump_creates_jsonl_file(self, tmp_path):
+        """When --dump-layer2 is set, a JSONL file is created with layer2 inputs."""
+        import json
+
+        reports = [_make_report(i) for i in range(1, 4)]
+        dump_file = tmp_path / "layer2_dump.jsonl"
+
+        async def fake_process(report, **kwargs):
+            return _make_l2_result(report.id)
+
+        sess = _mock_session()
+        submit_call_count = [0]
+
+        async def fake_submit(inputs, batch_num):
+            submit_call_count[0] += 1
+            return "should_not_be_called"
+
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
+             patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
+             patch("run_analysis.update_pipeline_status", AsyncMock()), \
+             patch("run_analysis.AsyncSessionLocal", return_value=sess), \
+             patch("run_analysis._submit_and_save_batch", AsyncMock(side_effect=fake_submit)), \
+             patch("run_analysis.settings") as ms, \
+             patch("builtins.print"):
+            ms.anthropic_api_key = None  # no key needed in dump mode
+            ms.gemini_api_key = "fake"
+
+            args = self._make_dump_args(dump_path=str(dump_file))
+            from run_analysis import main
+            await main(args)
+
+        assert dump_file.exists(), "JSONL dump file was not created"
+        lines = [l for l in dump_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(lines) == 3, f"Expected 3 JSONL lines, got {len(lines)}"
+
+    @pytest.mark.asyncio
+    async def test_dump_jsonl_format(self, tmp_path):
+        """Each JSONL line has the correct fields: report_id, user_content, md_truncated, md_chars, channel."""
+        import json
+
+        reports = [_make_report(42)]
+        dump_file = tmp_path / "layer2_dump.jsonl"
+
+        async def fake_process(report, **kwargs):
+            r = _make_l2_result(report.id)
+            # Set specific values to verify correct extraction
+            r["layer2_input"]["user_content"] = "test content"
+            r["layer2_input"]["md_truncated"] = True
+            r["layer2_input"]["md_chars"] = 9999
+            r["layer2_input"]["channel"] = "@testchannel"
+            return r
+
+        sess = _mock_session()
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[42])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
+             patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
+             patch("run_analysis.update_pipeline_status", AsyncMock()), \
+             patch("run_analysis.AsyncSessionLocal", return_value=sess), \
+             patch("run_analysis.settings") as ms, \
+             patch("builtins.print"):
+            ms.anthropic_api_key = None
+            ms.gemini_api_key = "fake"
+
+            args = self._make_dump_args(dump_path=str(dump_file))
+            from run_analysis import main
+            await main(args)
+
+        lines = [l for l in dump_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["report_id"] == 42
+        assert record["user_content"] == "test content"
+        assert record["md_truncated"] is True
+        assert record["md_chars"] == 9999
+        assert record["channel"] == "@testchannel"
+
+    @pytest.mark.asyncio
+    async def test_dump_no_anthropic_api_call(self, tmp_path):
+        """In dump mode, _submit_and_save_batch is never called."""
+        reports = [_make_report(i) for i in range(1, 4)]
+        dump_file = tmp_path / "layer2_dump.jsonl"
+        submit_call_count = [0]
+
+        async def fake_process(report, **kwargs):
+            return _make_l2_result(report.id)
+
+        async def fake_submit(inputs, batch_num):
+            submit_call_count[0] += 1
+            return "unexpected_call"
+
+        sess = _mock_session()
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
+             patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
+             patch("run_analysis.update_pipeline_status", AsyncMock()), \
+             patch("run_analysis.AsyncSessionLocal", return_value=sess), \
+             patch("run_analysis._submit_and_save_batch", AsyncMock(side_effect=fake_submit)), \
+             patch("run_analysis.settings") as ms, \
+             patch("builtins.print"):
+            ms.anthropic_api_key = None
+            ms.gemini_api_key = "fake"
+
+            args = self._make_dump_args(dump_path=str(dump_file))
+            from run_analysis import main
+            await main(args)
+
+        assert submit_call_count[0] == 0, (
+            f"_submit_and_save_batch was called {submit_call_count[0]} times in dump mode"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dump_pipeline_status_stays_analysis_pending(self, tmp_path):
+        """In dump mode, pipeline_status should remain analysis_pending (no transition to done)."""
+        reports = [_make_report(10)]
+        dump_file = tmp_path / "layer2_dump.jsonl"
+
+        async def fake_process(report, **kwargs):
+            return _make_l2_result(report.id)
+
+        sess = _mock_session()
+        status_updates = []
+
+        async def fake_update_status(session, report_id, status):
+            status_updates.append((report_id, status))
+
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[10])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
+             patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
+             patch("run_analysis.update_pipeline_status", AsyncMock(side_effect=fake_update_status)), \
+             patch("run_analysis.AsyncSessionLocal", return_value=sess), \
+             patch("run_analysis.settings") as ms, \
+             patch("builtins.print"):
+            ms.anthropic_api_key = None
+            ms.gemini_api_key = "fake"
+
+            args = self._make_dump_args(dump_path=str(dump_file))
+            from run_analysis import main
+            await main(args)
+
+        # Only "analysis_pending" transitions should occur (from process_single start)
+        # "done" should never be set
+        done_updates = [(rid, s) for rid, s in status_updates if s == "done"]
+        assert len(done_updates) == 0, (
+            f"pipeline_status was set to 'done' in dump mode: {done_updates}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dump_works_without_anthropic_key(self, tmp_path):
+        """Dump mode works even when anthropic_api_key is None."""
+        import json
+
+        reports = [_make_report(7)]
+        dump_file = tmp_path / "layer2_dump.jsonl"
+
+        async def fake_process(report, **kwargs):
+            return _make_l2_result(report.id)
+
+        sess = _mock_session()
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[7])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
+             patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
+             patch("run_analysis.update_pipeline_status", AsyncMock()), \
+             patch("run_analysis.AsyncSessionLocal", return_value=sess), \
+             patch("run_analysis.settings") as ms, \
+             patch("builtins.print"):
+            ms.anthropic_api_key = None  # explicitly no key
+            ms.gemini_api_key = "fake"
+
+            args = self._make_dump_args(dump_path=str(dump_file))
+            from run_analysis import main
+            await main(args)  # must not raise
+
+        assert dump_file.exists()
+        lines = [l for l in dump_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["report_id"] == 7
+
+    @pytest.mark.asyncio
+    async def test_dump_multiple_batches_all_written(self, tmp_path):
+        """All reports are written to JSONL even when batch_size < total reports."""
+        import json
+
+        n_reports = 5
+        reports = [_make_report(i) for i in range(1, n_reports + 1)]
+        dump_file = tmp_path / "layer2_dump.jsonl"
+
+        async def fake_process(report, **kwargs):
+            return _make_l2_result(report.id)
+
+        sess = _mock_session()
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
+             patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
+             patch("run_analysis.update_pipeline_status", AsyncMock()), \
+             patch("run_analysis.AsyncSessionLocal", return_value=sess), \
+             patch("run_analysis.settings") as ms, \
+             patch("builtins.print"):
+            ms.anthropic_api_key = None
+            ms.gemini_api_key = "fake"
+
+            # batch_size=2: triggers multiple flushes
+            args = self._make_dump_args(dump_path=str(dump_file), batch_size=2)
+            from run_analysis import main
+            await main(args)
+
+        lines = [l for l in dump_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(lines) == n_reports, f"Expected {n_reports} lines, got {len(lines)}"
+        report_ids_in_dump = {json.loads(l)["report_id"] for l in lines}
+        assert report_ids_in_dump == set(range(1, n_reports + 1))
+
+    @pytest.mark.asyncio
+    async def test_dump_reports_with_no_l2_not_written(self, tmp_path):
+        """Reports that fail markdown (no layer2_input) are not written to the dump."""
+        import json
+
+        reports = [_make_report(1), _make_report(2)]
+        dump_file = tmp_path / "layer2_dump.jsonl"
+
+        async def fake_process(report, **kwargs):
+            if report.id == 1:
+                return _make_l2_result(report.id)
+            else:
+                return _make_no_l2_result(report.id)  # no layer2_input
+
+        sess = _mock_session()
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[1, 2])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
+             patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
+             patch("run_analysis.update_pipeline_status", AsyncMock()), \
+             patch("run_analysis.AsyncSessionLocal", return_value=sess), \
+             patch("run_analysis.settings") as ms, \
+             patch("builtins.print"):
+            ms.anthropic_api_key = None
+            ms.gemini_api_key = "fake"
+
+            args = self._make_dump_args(dump_path=str(dump_file))
+            from run_analysis import main
+            await main(args)
+
+        lines = [l for l in dump_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["report_id"] == 1

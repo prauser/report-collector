@@ -583,10 +583,19 @@ def make_layer2_result(
     md_was_truncated: bool = False,
     md_original_chars: int = 0,
     is_batch: bool = False,
+    report_id: int | None = None,
 ) -> Layer2Result | None:
     """LLM 응답 데이터를 Layer2Result로 변환."""
     if tool_input is None:
         return None
+
+    from parser.layer2_validator import validate_and_sanitize_layer2
+    tool_input, corrections = validate_and_sanitize_layer2(tool_input, report_id=report_id)
+    if tool_input is None:
+        log.warning("layer2_validation_rejected", report_id=report_id, corrections=corrections)
+        return None
+    if corrections:
+        log.info("layer2_sanitized", report_id=report_id, count=len(corrections))
 
     model = settings.llm_pdf_model
     cost = calc_cost_usd(
@@ -684,6 +693,7 @@ async def extract_layer2(
         result, usage.input_tokens, usage.output_tokens,
         cache_creation, cache_read,
         md_was_truncated, md_original_chars,
+        report_id=report_id,
     )
 
     if layer2 is None:
