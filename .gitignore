@@ -43,6 +43,10 @@ web/.env.local
 *.log
 logs/markdown_failures.csv
 logs/pending_batches.jsonl
+logs/layer2_dump.jsonl
+logs/layer2_sanitized.csv
+logs/layer2_validation_failures.csv
+logs/no_markdown_reports.csv
 backfill_dates_cache.json
 target_batches.txt
 .analysis_running
