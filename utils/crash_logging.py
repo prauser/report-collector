@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import signal
 import sys
@@ -36,6 +37,8 @@ log = structlog.get_logger(__name__)
 # the difference between a clean shutdown and an abrupt one.
 _clean_exit = False
 _sentinel_path: Optional[Path] = None
+_crash_log_path: Optional[Path] = None
+_file_logger: Optional[logging.Logger] = None
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +84,33 @@ def _check_previous_crash(path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# File logger
+# ---------------------------------------------------------------------------
+
+def _setup_file_logger(log_path: Path, process_name: str) -> logging.Logger:
+    """Create a dedicated file logger for crash events."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger(f"crash.{process_name}")
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+    handler = logging.FileHandler(str(log_path), encoding="utf-8")
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%S"
+    ))
+    logger.addHandler(handler)
+    return logger
+
+
+def _log_to_file(level: str, message: str, **kwargs) -> None:
+    """Write to crash log file if configured."""
+    if _file_logger is None:
+        return
+    extra = " ".join(f"{k}={v}" for k, v in kwargs.items()) if kwargs else ""
+    line = f"{message} {extra}".strip()
+    getattr(_file_logger, level, _file_logger.info)(line)
+
+
+# ---------------------------------------------------------------------------
 # atexit handler
 # ---------------------------------------------------------------------------
 
@@ -88,8 +118,10 @@ def _atexit_handler() -> None:
     global _clean_exit, _sentinel_path
     if _clean_exit:
         log.info("process_exit", status="clean")
+        _log_to_file("info", "process_exit", status="clean")
     else:
         log.warning("process_exit", status="unclean_or_exception")
+        _log_to_file("warning", "process_exit", status="unclean_or_exception")
     if _sentinel_path is not None:
         _remove_sentinel(_sentinel_path)
 
@@ -101,7 +133,7 @@ def _atexit_handler() -> None:
 def _make_excepthook(process_name: str):
     def _excepthook(exc_type, exc_value, exc_tb):
         if issubclass(exc_type, KeyboardInterrupt):
-            # Let KeyboardInterrupt print normally so Ctrl-C still works.
+            _log_to_file("warning", "keyboard_interrupt", process=process_name)
             sys.__excepthook__(exc_type, exc_value, exc_tb)
             return
         tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -111,6 +143,8 @@ def _make_excepthook(process_name: str):
             exc_type=exc_type.__name__,
             traceback=tb_str,
         )
+        _log_to_file("critical", f"unhandled_exception: {exc_type.__name__}\n{tb_str}",
+                      process=process_name)
     return _excepthook
 
 
@@ -133,12 +167,15 @@ def _make_asyncio_exception_handler(process_name: str):
                 exc_type=type(exc).__name__,
                 traceback=tb_str,
             )
+            _log_to_file("error", f"asyncio_unhandled: {type(exc).__name__}: {msg}\n{tb_str}",
+                          process=process_name)
         else:
             log.error(
                 "asyncio_unhandled_exception",
                 process=process_name,
                 message=msg,
             )
+            _log_to_file("error", f"asyncio_unhandled: {msg}", process=process_name)
     return _handler
 
 
@@ -178,12 +215,17 @@ def setup_crash_logging(
                   working directory.
         install_sigterm: Whether to install a SIGTERM handler (default True).
     """
-    global _sentinel_path, _clean_exit
+    global _sentinel_path, _clean_exit, _file_logger, _crash_log_path
     _clean_exit = False
 
     # Sentinel file location
     dir_ = base_dir if base_dir is not None else Path.cwd()
     _sentinel_path = dir_ / sentinel_name
+
+    # Crash log file (logs/crash_{process_name}.log)
+    _crash_log_path = dir_ / "logs" / f"crash_{process_name}.log"
+    _file_logger = _setup_file_logger(_crash_log_path, process_name)
+    _log_to_file("info", "process_start", pid=os.getpid(), process=process_name)
 
     # Detect prior crash before overwriting the sentinel
     _check_previous_crash(_sentinel_path)
