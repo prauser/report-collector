@@ -62,18 +62,29 @@ async def convert_pdf_to_markdown(pdf_path: Path) -> tuple[str | None, str]:
 _MD_CONVERT_TIMEOUT = 120  # 최대 57초 × ~2배 여유
 
 
+def _pymupdf4llm_sync(pdf_path: str) -> str | None:
+    """pymupdf4llm 동기 변환. Document를 명시적으로 닫아 메모리 누수 방지."""
+    import pymupdf
+    import pymupdf4llm
+
+    doc = pymupdf.open(pdf_path)
+    try:
+        md_text = pymupdf4llm.to_markdown(doc)
+        return md_text if md_text and md_text.strip() else None
+    finally:
+        doc.close()
+
+
 async def _convert_pymupdf4llm(pdf_path: Path) -> str | None:
     """PyMuPDF4LLM으로 PDF → Markdown 변환. 타임아웃 적용."""
     import asyncio
 
     try:
-        import pymupdf4llm
-
         md_text = await asyncio.wait_for(
-            asyncio.to_thread(pymupdf4llm.to_markdown, str(pdf_path)),
+            asyncio.to_thread(_pymupdf4llm_sync, str(pdf_path)),
             timeout=_MD_CONVERT_TIMEOUT,
         )
-        if not md_text or not md_text.strip():
+        if not md_text:
             log.warning("pymupdf4llm_empty", path=str(pdf_path))
             return None
         return md_text
