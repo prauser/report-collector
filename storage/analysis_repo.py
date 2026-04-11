@@ -131,16 +131,21 @@ async def save_analysis(
         delete(ReportSectorMention).where(ReportSectorMention.report_id == report_id)
     )
     if layer2.sector_mentions:
-        sector_rows = [
-            {
+        seen_sector_keys = set()
+        sector_rows = []
+        for sm in layer2.sector_mentions:
+            sector = sm.get("sector", "")
+            mention_type = sm.get("mention_type", "primary")
+            dedup_key = (sector, mention_type)
+            if not sector or dedup_key in seen_sector_keys:
+                continue
+            seen_sector_keys.add(dedup_key)
+            sector_rows.append({
                 "report_id": report_id,
-                "sector": sm.get("sector", ""),
-                "mention_type": sm.get("mention_type", "primary"),
+                "sector": sector,
+                "mention_type": mention_type,
                 "impact": sm.get("impact"),
-            }
-            for sm in layer2.sector_mentions
-            if sm.get("sector")
-        ]
+            })
         if sector_rows:
             await session.execute(insert(ReportSectorMention), sector_rows)
 
@@ -149,15 +154,18 @@ async def save_analysis(
         delete(ReportKeyword).where(ReportKeyword.report_id == report_id)
     )
     if layer2.keywords:
-        kw_rows = [
-            {
+        seen_keywords = set()
+        kw_rows = []
+        for kw in layer2.keywords:
+            keyword = kw.get("keyword", "")
+            if not keyword or keyword in seen_keywords:
+                continue
+            seen_keywords.add(keyword)
+            kw_rows.append({
                 "report_id": report_id,
-                "keyword": kw.get("keyword", ""),
+                "keyword": keyword,
                 "keyword_type": kw.get("keyword_type"),
-            }
-            for kw in layer2.keywords
-            if kw.get("keyword")
-        ]
+            })
         if kw_rows:
             await session.execute(insert(ReportKeyword), kw_rows)
 

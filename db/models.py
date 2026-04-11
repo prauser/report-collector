@@ -300,7 +300,7 @@ class ReportSectorMention(Base):
     __table_args__ = (
         Index("idx_rscm_sector", "sector"),
         Index("idx_rscm_report_id", "report_id"),
-        Index("uq_report_sector", "report_id", "sector", unique=True),
+        Index("uq_report_sector_type", "report_id", "sector", "mention_type", unique=True),
     )
 
 
