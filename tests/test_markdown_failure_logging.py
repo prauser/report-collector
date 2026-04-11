@@ -321,7 +321,7 @@ class TestMarkdownFailureNotRepicked:
         import inspect
         import run_analysis
 
-        source = inspect.getsource(run_analysis._get_unanalyzed_reports)
+        source = inspect.getsource(run_analysis._get_unanalyzed_report_ids)
         assert "analysis_failed" not in source, (
             "analysis_failed should not be in _ANALYZABLE_STATUSES — "
             "failed reports would be re-picked on next run."

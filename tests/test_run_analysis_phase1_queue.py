@@ -46,7 +46,7 @@ def _make_report(report_id: int) -> MagicMock:
 
 # ──────────────────────────────────────────────
 # Helper: run Phase 1 in isolation by mocking
-# _get_unanalyzed_reports and process_single
+# _get_unanalyzed_report_ids / _load_report and process_single
 # ──────────────────────────────────────────────
 
 async def _run_phase1(reports, process_single_side_effect, concurrency=2):
@@ -63,10 +63,6 @@ async def _run_phase1(reports, process_single_side_effect, concurrency=2):
     """
     captured: dict = {}
 
-    # Patch _get_unanalyzed_reports to return our fake reports
-    async def fake_get_reports(limit):
-        return reports
-
     # Intercept results after Phase 1 by patching the layer2 functions
     # to capture `results` at the point where Phase 2 reads it.
     # We do this by replacing `run_layer2_batch` and letting main() run to the
@@ -76,7 +72,8 @@ async def _run_phase1(reports, process_single_side_effect, concurrency=2):
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get_reports), \
+    with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+         patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
          patch("run_analysis.process_single", new_callable=AsyncMock,
                side_effect=process_single_side_effect), \
          patch("run_analysis.update_pipeline_status", new_callable=AsyncMock), \
@@ -197,10 +194,8 @@ class TestPhase1WorkerPattern:
     @pytest.mark.asyncio
     async def test_empty_reports_no_error(self):
         """Zero reports: main() exits at 'Nothing to do.' without spawning workers."""
-        async def fake_get(_limit):
-            return []
-
-        with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[])), \
+             patch("run_analysis._load_report", AsyncMock(return_value=None)), \
              patch("run_analysis.settings") as ms:
             ms.gemini_api_key = "fake"
             ms.anthropic_api_key = None
@@ -230,11 +225,9 @@ class TestPhase1ResultShape:
 
         original_log = None
 
-        async def fake_get(_limit):
-            return reports
-
         db_patch1, db_patch2 = _db_mocks()
-        with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", new_callable=AsyncMock,
                    side_effect=fake_process), \
              db_patch1, db_patch2, \
@@ -263,11 +256,9 @@ class TestPhase1ResultShape:
         async def fake_process(report, **kwargs):
             raise ValueError("something broke")
 
-        async def fake_get(_limit):
-            return reports
-
         db_patch1, db_patch2 = _db_mocks()
-        with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", new_callable=AsyncMock,
                    side_effect=fake_process), \
              db_patch1, db_patch2, \
@@ -303,9 +294,6 @@ class TestPhase1ProgressLogging:
                 raise asyncio.TimeoutError()
             return {"report_id": report.id, "status": "ok", "steps": {}}
 
-        async def fake_get(_limit):
-            return reports
-
         analyzed_calls = []
 
         def capture_info(event, **kwargs):
@@ -313,7 +301,8 @@ class TestPhase1ProgressLogging:
                 analyzed_calls.append(kwargs)
 
         db_patch1, db_patch2 = _db_mocks()
-        with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", new_callable=AsyncMock,
                    side_effect=fake_process), \
              db_patch1, db_patch2, \
@@ -341,9 +330,6 @@ class TestPhase1ProgressLogging:
         async def fake_process(report, **kwargs):
             raise RuntimeError("db error")
 
-        async def fake_get(_limit):
-            return reports
-
         analyzed_calls = []
 
         def capture_info(event, **kwargs):
@@ -351,7 +337,8 @@ class TestPhase1ProgressLogging:
                 analyzed_calls.append(kwargs)
 
         db_patch1, db_patch2 = _db_mocks()
-        with patch("run_analysis._get_unanalyzed_reports", side_effect=fake_get), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", new_callable=AsyncMock,
                    side_effect=fake_process), \
              db_patch1, db_patch2, \

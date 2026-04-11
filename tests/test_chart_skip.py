@@ -490,7 +490,8 @@ class TestMainPassesChartMode:
             return {"report_id": report.id, "status": "ok", "steps": {}}
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -516,7 +517,8 @@ class TestMainPassesChartMode:
             return {"report_id": report.id, "status": "ok", "steps": {}}
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
@@ -542,7 +544,8 @@ class TestMainPassesChartMode:
             return {"report_id": report.id, "status": "ok", "steps": {}}
 
         sess = _mock_session()
-        with patch("run_analysis._get_unanalyzed_reports", AsyncMock(return_value=reports)), \
+        with patch("run_analysis._get_unanalyzed_report_ids", AsyncMock(return_value=[r.id for r in reports])), \
+             patch("run_analysis._load_report", AsyncMock(side_effect=lambda rid: next((r for r in reports if r.id == rid), None))), \
              patch("run_analysis.process_single", AsyncMock(side_effect=fake_process)), \
              patch("run_analysis.update_pipeline_status", AsyncMock()), \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
