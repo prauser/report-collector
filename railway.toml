@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "pip install pykrx==1.2.4 --no-deps"
+buildCommand = "pip install pykrx==1.0.51 --no-deps"
 
 [deploy]
 startCommand = "alembic -c db/migrations/alembic.ini upgrade head && uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080}"
