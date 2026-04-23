@@ -703,5 +703,9 @@ def cli():
 
 if __name__ == "__main__":
     args = cli()
+    from utils.crash_logging import check_exclusive
+    if not check_exclusive(sentinel_name=".analysis_running"):
+        print("Another run_analysis instance is running. Exiting.")
+        sys.exit(0)
     setup_crash_logging(sentinel_name=".analysis_running", process_name="run_analysis")
     asyncio.run(main(args))

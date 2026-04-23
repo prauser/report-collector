@@ -66,6 +66,34 @@ def _remove_sentinel(path: Path) -> None:
         log.warning("sentinel_remove_failed", path=str(path), error=str(e))
 
 
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process with the given PID is still running (Windows/Unix)."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return exit_code.value == STILL_ACTIVE
+                return False
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
+
 def _check_previous_crash(path: Path) -> None:
     """If sentinel file already exists, a previous run did not exit cleanly."""
     if not path.exists():
@@ -265,6 +293,56 @@ def install_asyncio_handler(loop, process_name: str = "process") -> None:
             ...
     """
     loop.set_exception_handler(_make_asyncio_exception_handler(process_name))
+
+
+def check_exclusive(
+    sentinel_name: str = ".process_running",
+    base_dir: Optional[Path] = None,
+) -> bool:
+    """Check if another instance is already running via sentinel file.
+
+    Returns True if it's safe to proceed (no live process holds the lock).
+    Returns False if another instance is still running — caller should exit.
+
+    If the sentinel exists but the recorded PID is dead (stale lock),
+    logs a warning and returns True.
+    """
+    dir_ = base_dir if base_dir is not None else Path.cwd()
+    path = dir_ / sentinel_name
+
+    if not path.exists():
+        return True
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        prev_pid = data.get("pid")
+        prev_process = data.get("process_name", "unknown")
+        prev_started = data.get("started_at", "unknown")
+    except Exception:
+        log.warning("sentinel_parse_failed", path=str(path))
+        path.unlink(missing_ok=True)
+        return True
+
+    if prev_pid is not None and _is_pid_alive(prev_pid):
+        log.warning(
+            "another_instance_running",
+            sentinel=str(path),
+            pid=prev_pid,
+            process=prev_process,
+            started_at=prev_started,
+        )
+        return False
+
+    # Stale lock — previous process is dead
+    log.warning(
+        "stale_sentinel_removed",
+        sentinel=str(path),
+        dead_pid=prev_pid,
+        process=prev_process,
+        started_at=prev_started,
+    )
+    path.unlink(missing_ok=True)
+    return True
 
 
 def mark_clean_exit() -> None:

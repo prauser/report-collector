@@ -129,6 +129,7 @@ def _process_one(
     claude_cmd: str = "claude",
     cwd: str | None = None,
     model: str | None = None,
+    effort: str | None = None,
 ) -> dict:
     """단일 JSONL 항목을 claude -p 로 처리.
 
@@ -151,6 +152,8 @@ def _process_one(
             cmd_args = [resolved_cmd, "-p", "--output-format", "json"]
             if model:
                 cmd_args.extend(["--model", model])
+            if effort:
+                cmd_args.extend(["--effort", effort])
             proc = subprocess.run(
                 cmd_args,
                 input=prompt,
@@ -372,6 +375,7 @@ def run(args: argparse.Namespace) -> None:
     claude_cmd: str = getattr(args, "claude_cmd", "claude")
     cwd: str | None = getattr(args, "cwd", None)
     model: str | None = getattr(args, "model", None)
+    effort: str | None = getattr(args, "effort", None)
 
     print(f"=== claude_layer2.py ===")
     print(f"input:       {input_path}")
@@ -380,6 +384,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"max_daily:   {max_daily if max_daily > 0 else '무제한'}")
     print(f"timeout:     {timeout}s")
     print(f"model:       {model or '(default)'}")
+    print(f"effort:      {effort or '(default)'}")
     if cwd:
         print(f"cwd:         {cwd}")
     print()
@@ -425,7 +430,7 @@ def run(args: argparse.Namespace) -> None:
         idx, item = idx_item
         report_id = item.get("report_id")
 
-        result = _process_one(item, timeout=timeout, claude_cmd=claude_cmd, cwd=cwd, model=model)
+        result = _process_one(item, timeout=timeout, claude_cmd=claude_cmd, cwd=cwd, model=model, effort=effort)
         writer.append(result)
 
         with _count_lock:
@@ -504,6 +509,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--model",
         default="claude-sonnet-4-6",
         help="claude -p에 전달할 모델 (기본: claude-sonnet-4-6)",
+    )
+    parser.add_argument(
+        "--effort",
+        default=None,
+        choices=["low", "medium", "high", "xhigh", "max"],
+        help="claude -p에 전달할 effort level (기본: 모델 기본값)",
     )
     parser.add_argument(
         "--cwd",
