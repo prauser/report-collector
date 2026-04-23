@@ -170,24 +170,9 @@ claude --version
 
 ---
 
-## 8. bat 파일 경로 수정
+## 8. bat 파일 경로 (수정 불필요)
 
-모든 `scripts/*.bat`의 `PROJECT_DIR`을 새 경로로 일괄 수정:
-
-```cmd
-REM 대상 파일
-scripts\start_listener.bat
-scripts\scheduled_layer2.bat
-scripts\scheduled_layer2_opus.bat
-scripts\scheduled_batch_submit.bat
-scripts\scheduled_batch_recover.bat
-```
-
-각 파일 상단의:
-```bat
-set "PROJECT_DIR=C:\Users\praus\Projects\report-collector"
-```
-→ 새 경로로 변경.
+`scripts/*.bat`는 `%~dp0..`로 자신의 위치 기준 `PROJECT_DIR`을 자동 유도하므로 레포를 어디에 두든 그대로 동작합니다 (커밋 `a69ed7f`).
 
 > bat 파일 줄바꿈은 **반드시 CRLF**. Git 설정에서 `core.autocrlf=true`로 자동 변환되도록 두는 게 안전.
 
@@ -240,7 +225,65 @@ pytest tests\ --ignore=tests\test_db_setup.py --ignore=tests\test_storage.py --i
 
 ---
 
-## 11. 머신 이전 체크리스트
+## 11. 머신 이관 자동화 스크립트
+
+이관 시 챙겨야 할 상태 파일과 schtasks 비활성화를 스크립트로 묶어놨음.
+
+### 기존 머신에서 (이관 준비)
+
+```cmd
+REM 1. 상태 파일 스냅샷 생성 (기본: 바탕화면에 report-collector-snapshot-YYYYMMDD-HHMM)
+scripts\migration_snapshot.bat
+REM 또는 목적지 지정:
+scripts\migration_snapshot.bat D:\migration
+
+REM 2. PDF 별도 이관 (수십 GB → robocopy로 resume 가능하게)
+robocopy F:\report-collector\pdfs D:\migration\pdfs /E /R:3 /W:5 /MT:8
+
+REM 3. 새 머신에서 세팅 완료 후, 이 머신의 schtasks 비활성화
+scripts\disable_schedules.bat
+```
+
+**`migration_snapshot.bat`이 복사하는 것**:
+- 필수(CRITICAL): `config\.env`, `report_collector.session`, `logs\pending_batches.jsonl`
+- 진행 중 상태: `data\layer2_scheduled_*.jsonl`
+- 이력/캐시: `logs\markdown_failures.csv`, `logs\layer2_validation_failures.csv`, `logs\layer2_sanitized.csv`, `logs\no_markdown_reports.csv`, `logs\crash_run_analysis.log`, `backfill_dates_cache.json`
+- 스냅샷 설명: `SNAPSHOT_INFO.txt` (in-flight batch 개수 기록)
+
+**`migration_snapshot.bat`이 복사하지 않는 것** (별도 이관):
+- `F:\report-collector\pdfs\` — 크기 커서 robocopy 권장
+- `%USERPROFILE%\.claude\` — Claude Code 토큰. `claude login` 재실행으로 대체 가능
+- `.venv\` — 새 머신에서 `pip install -r requirements.txt`로 재생성
+- DB — Railway 공유
+
+**`disable_schedules.bat`이 하는 일**:
+- `schtasks /change /disable` 5종 (Listener + Batch Submit/Recover + Layer2 + Layer2_Opus)
+- 현재 돌고 있는 main.py/run_analysis.py/claude_layer2.py 등 python 프로세스 출력 (수동 종료 확인용)
+- `pending_batches.jsonl`에 in-flight batch가 있으면 경고
+
+### 새 머신에서 (이관 적용)
+
+```cmd
+REM 1. 레포 클론 + venv + 의존성 (§1~§2)
+REM 2. 스냅샷에서 파일 복원
+copy D:\migration\report-collector-snapshot-20260423-1450\config\.env         config\
+copy D:\migration\report-collector-snapshot-20260423-1450\report_collector.session .
+copy D:\migration\report-collector-snapshot-20260423-1450\logs\*              logs\
+copy D:\migration\report-collector-snapshot-20260423-1450\data\*              data\
+copy D:\migration\report-collector-snapshot-20260423-1450\backfill_dates_cache.json .
+
+REM 3. PDF 경로 세팅 (.env의 PDF_BASE_PATH 조정)
+REM 4. Claude Code 로그인 (§7)
+REM 5. 동작 확인 (§9)
+REM 6. schtasks 등록 (scheduler_setup.md 참조)
+
+REM 7. in-flight batch 있었다면 즉시 recover
+.venv\Scripts\python.exe scripts\recover_batches.py --from-pending --apply
+```
+
+---
+
+## 12. 머신 이전 체크리스트
 
 - [ ] Python 3.12 설치
 - [ ] Node.js LTS + Claude Code CLI 설치 + `claude login`
@@ -249,7 +292,6 @@ pytest tests\ --ignore=tests\test_db_setup.py --ignore=tests\test_storage.py --i
 - [ ] PDF 저장 디렉토리 생성
 - [ ] DB 마이그레이션 (Railway 공유면 no-op)
 - [ ] Telegram 세션 복사 또는 재인증 (**중복 가동 주의**)
-- [ ] `scripts/*.bat`의 `PROJECT_DIR` 일괄 수정
 - [ ] 각 스크립트 수동 1회 실행 + 로그 확인
 - [ ] pytest 통과
 - [ ] Task Scheduler 등록
@@ -257,7 +299,7 @@ pytest tests\ --ignore=tests\test_db_setup.py --ignore=tests\test_storage.py --i
 
 ---
 
-## 12. 트러블슈팅
+## 13. 트러블슈팅
 
 ### `claude_not_found` 연발
 - `where claude` 로 경로 확인. PATH에 `%APPDATA%\npm` 들어있는지 확인.
@@ -285,7 +327,7 @@ pytest tests\ --ignore=tests\test_db_setup.py --ignore=tests\test_storage.py --i
 
 ---
 
-## 13. 비밀 파일/디렉토리 (절대 git commit 금지)
+## 14. 비밀 파일/디렉토리 (절대 git commit 금지)
 
 | 파일 | 용도 |
 |---|---|
