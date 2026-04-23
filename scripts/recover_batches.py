@@ -296,7 +296,7 @@ async def _recover_all_batches(client, apply: bool) -> None:
 
         # 배치 결과를 먼저 모아서 layer2 변환
         candidates: list[tuple[int, object]] = []  # (report_id, layer2)
-        for entry in results_iter:
+        async for entry in results_iter:
             if entry.result.type != "succeeded":
                 continue
 

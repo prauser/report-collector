@@ -6,7 +6,8 @@ REM  Run after Sonnet weekly quota reset (04/24 07:00)
 REM  - Enable Layer2_Claude_Code (Sonnet)
 REM  - Disable Layer2_Claude_Code_Opus
 REM ========================================
-set "LOG_FILE=C:\Users\praus\Projects\report-collector\logs\schedule_switch.log"
+for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
+set "LOG_FILE=%PROJECT_DIR%\logs\schedule_switch.log"
 
 echo ======================================== >> "%LOG_FILE%"
 echo [%date% %time%] Schedule switch: Opus -^> Sonnet >> "%LOG_FILE%"

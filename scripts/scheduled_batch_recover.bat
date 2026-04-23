@@ -8,7 +8,7 @@ REM  - 매일 04시 실행 (Task Scheduler)
 REM  - pending 배치 결과를 DB에 저장
 REM ========================================
 
-set "PROJECT_DIR=C:\Users\praus\Projects\report-collector"
+for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
 set "PYTHON=%PROJECT_DIR%\.venv\Scripts\python.exe"
 set "LOG_FILE=%PROJECT_DIR%\logs\scheduled_batch.log"
 

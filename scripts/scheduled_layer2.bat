@@ -8,7 +8,7 @@ REM  - 5시간마다 Windows Task Scheduler로 실행
 REM  - 70건 dump → claude -p 처리 → DB import
 REM ========================================
 
-set "PROJECT_DIR=C:\Users\praus\Projects\report-collector"
+for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
 set "PYTHON=%PROJECT_DIR%\.venv\Scripts\python.exe"
 set "DUMP_PATH=%PROJECT_DIR%\data\layer2_scheduled_inputs.jsonl"
 set "OUTPUT_PATH=%PROJECT_DIR%\data\layer2_scheduled_outputs.jsonl"

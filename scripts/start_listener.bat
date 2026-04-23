@@ -7,7 +7,7 @@ REM  실시간 리스너 (Telegram 수집 + PDF)
 REM  - 로그온 시 자동 실행
 REM ========================================
 
-set "PROJECT_DIR=C:\Users\praus\Projects\report-collector"
+for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
 set "PYTHON=%PROJECT_DIR%\.venv\Scripts\python.exe"
 set "LOG_FILE=%PROJECT_DIR%\logs\listener.log"
 

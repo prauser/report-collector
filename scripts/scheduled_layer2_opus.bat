@@ -9,7 +9,7 @@ REM  - 동일 dump/output 파일 공유 (scheduled_layer2.bat과 호환)
 REM  - 사용: scripts\scheduled_layer2_opus.bat
 REM ========================================
 
-set "PROJECT_DIR=C:\Users\praus\Projects\report-collector"
+for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
 set "PYTHON=%PROJECT_DIR%\.venv\Scripts\python.exe"
 set "DUMP_PATH=%PROJECT_DIR%\data\layer2_scheduled_inputs.jsonl"
 set "OUTPUT_PATH=%PROJECT_DIR%\data\layer2_scheduled_outputs.jsonl"
