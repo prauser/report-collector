@@ -169,6 +169,27 @@ Phase C 키움 파서 (샘플 확보 시) ──┘
 **1순위 — Phase E 크로스 연동**: 남은 작업 중 시스템 가치가 가장 큼.
 **전제 조건 — stock_code 정규화 (Phase B 잔여)**: 크로스 연동의 조인 키.
 
+### 세션 단위 플랜
+
+작업을 Phase별로 뭉치되, 의존관계 기준으로 세션 경계를 분리.
+각 세션은 독립적으로 PR 가능 크기를 유지 — 대규모 작업은 분할.
+
+| 세션 | 내용 | 목표 산출물 | 의존 |
+|---|---|---|---|
+| **S1** | Phase B 잔여 — 리포트 시각화 마감 | `Layer2Section`에 extraction_quality + PDF 원문 링크, `report_stock_mentions` 크로스링크 UI, 섹터 산업 리포트 `stock_implications` 표시 | — |
+| **S2** | Phase A+B 공통 — **stock_code 정규화** | 1회성 배치 스크립트: `report_stock_mentions.stock_code` pseudo 정리, `reports.stock_code` NULL 재추출, KRX 마스터 최신화. `pdf_fail_retryable` 일괄 정리도 함께 | — |
+| **S3** | Phase D 고도화 — Agent 운영성 | 일일 예산 체크 (`settings.agent_daily_budget_usd`), Haiku/Sonnet 분기 라우팅, 모바일 입력창 고정 + 자동 스크롤 | — |
+| **S4** | Phase E-1 — 매매 → 리포트 방향 | `trades/chart/[symbol]` 페이지에 해당 종목 리포트 + Layer2 요약 사이드바, stock_code 매칭(+이름 ILIKE 폴백) | **S2 선행** |
+| **S5** | Phase E-2 — 리포트 → 매매 방향 | `reports/[id]` 페이지에 내 매매 내역 섹션, trades.symbol 매칭 | **S2 선행** |
+| **S6** | Phase E-3 — Agent가 매매 참조 | `agent/tools.py`에 `search_my_trades`, `get_trade_performance` 도구 추가, 프롬프트 템플릿 보강 | **S3, S4, S5** |
+| **S7** | Phase E-4 — 통합 타임라인 | 대시보드에 최근 리포트 + 최근 매매 병합 뷰 | **S4, S5** |
+| **S8** | Phase C 잔여 — 키움 CSV 파서 | 실구현 (현재 11줄 스텁) | 샘플 확보 시 |
+| **S9** | Phase F — PWA | `manifest.json`, 서비스워커, 하단 탭바, 44px 터치 타겟, 차트 터치 제스처 | S4-S7 후 |
+
+> **메모리 `feedback_session_style.md`**: 대규모 작업은 Phase별 별도 세션으로 분할하는 것이 사용자 선호. 위 세션 경계는 이 선호에 맞춰 설정.
+
+**병렬성 주의**: S1-S3는 서로 독립이라 순서 자유. S4-S5는 S2(stock_code 정규화) 선행 필수.
+
 ---
 
 ## 미결정 사항
