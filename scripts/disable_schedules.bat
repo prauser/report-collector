@@ -18,7 +18,7 @@ echo.
 echo === 현재 돌고 있는 python 프로세스 ===
 echo (main.py / run_analysis.py가 보이면 수동 종료하세요)
 echo.
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter ""Name='python.exe'"" | Where-Object { $_.CommandLine -match 'main\.py|run_analysis\.py|claude_layer2\.py|import_layer2\.py|recover_batches\.py' } | Select-Object ProcessId,@{n='Cmd';e={if($_.CommandLine){$_.CommandLine.Substring(0,[Math]::Min(120,$_.CommandLine.Length))}}} | Format-Table -AutoSize"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -match 'main\.py|run_analysis\.py|claude_layer2\.py|import_layer2\.py|recover_batches\.py' } | Select-Object ProcessId, @{n='Cmd'; e={ $_.CommandLine }} | Format-Table -AutoSize -Wrap"
 
 echo.
 echo === pending_batches.jsonl 상태 ===
