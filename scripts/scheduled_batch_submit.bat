@@ -5,12 +5,14 @@ setlocal enabledelayedexpansion
 REM ========================================
 REM  Layer2 Anthropic Batch API 제출
 REM  - 매일 03시 실행 (Task Scheduler)
-REM  - 300건 분석 + 배치 제출
+REM  - 500건 분석 + 배치 제출
 REM ========================================
 
 for %%I in ("%~dp0..") do set "PROJECT_DIR=%%~fI"
 set "PYTHON=%PROJECT_DIR%\.venv\Scripts\python.exe"
 set "LOG_FILE=%PROJECT_DIR%\logs\scheduled_batch.log"
+
+set "BATCH_LIMIT=500"
 
 cd /d "%PROJECT_DIR%"
 if errorlevel 1 (
@@ -19,15 +21,15 @@ if errorlevel 1 (
 )
 
 echo ======================================== >> "%LOG_FILE%"
-echo [%date% %time%] Batch submit START (limit=300) >> "%LOG_FILE%"
+echo [%date% %time%] Batch submit START (limit=%BATCH_LIMIT%) >> "%LOG_FILE%"
 
 if not exist "%PYTHON%" (
     echo [%date% %time%] FATAL: python not found at %PYTHON% >> "%LOG_FILE%"
     goto :END
 )
 
-echo [%date% %time%] Step 1: run_analysis.py --limit 300 --batch-size 300 >> "%LOG_FILE%"
-"%PYTHON%" run_analysis.py --limit 300 --batch-size 300 >> "%LOG_FILE%" 2>&1
+echo [%date% %time%] Step 1: run_analysis.py --limit %BATCH_LIMIT% --batch-size %BATCH_LIMIT% >> "%LOG_FILE%"
+"%PYTHON%" run_analysis.py --limit %BATCH_LIMIT% --batch-size %BATCH_LIMIT% >> "%LOG_FILE%" 2>&1
 echo [%date% %time%] Step 1 exit code: %errorlevel% >> "%LOG_FILE%"
 
 :END
