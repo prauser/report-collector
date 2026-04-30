@@ -114,6 +114,7 @@ s2a_done                 48    PDF 다운로드 대기
 - [ ] `pdf_fail_retryable` 일괄 정리 스크립트 (컬럼은 있음, 배치 로직 없음)
 - [ ] `analysis_pending` 40,975건 소화 — 스케줄 유지하며 자연 감소
 - [ ] `stock_codes` KRX 전체 적재 상태 점검
+- [ ] Layer2 dump 성능 실험 — PDF→Markdown 변환 concurrency를 4/6/8로 나눠 측정. 각 설정별 처리량(건/시), peak RSS, PyMuPDF/Windows access violation 여부, `pymupdf4llm_timeout` 발생률을 기록한 뒤 운영값 결정. 현재 관측상 Layer2 LLM은 Codex 기준 약 30초/건이고, backlog 처리 병목은 dump 단계의 markdown 변환 timeout/긴 PDF 처리 쪽에 있음.
 
 ### Phase B 잔여 — 리포트 시각화 마감 (중)
 
