@@ -238,6 +238,25 @@ class ReportMarkdown(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ReportChartText(Base):
+    """차트 이미지 → 텍스트 변환 결과 캐시 (Gemini Flash-Lite)."""
+    __tablename__ = "report_chart_text"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("reports.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    chart_texts: Mapped[list] = mapped_column(JSONB, nullable=False)
+    image_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    success_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    total_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ReportAnalysis(Base):
     """Layer 2 구조화 분석 결과."""
     __tablename__ = "report_analysis"
