@@ -231,3 +231,32 @@ async def digitize_charts(
         q_digits=digit_chars,
     )
     return digitized
+
+
+async def get_or_digitize_charts(
+    images: list[ExtractedImage],
+    report_id: int | None,
+    channel: str | None = None,
+) -> DigitizeResult:
+    """DB 캐시 우선 조회. miss 시 digitize_charts 호출 후 저장.
+
+    - report_id가 None이면 캐시 우회 (digitize_charts 직접 호출).
+    - load 실패는 fail-silent (None 반환 → cache miss로 동일 처리).
+    - save 실패는 fail-silent.
+    """
+    from storage.chart_text_repo import load_chart_text, save_chart_text
+
+    if report_id is None:
+        return await digitize_charts(images, report_id=report_id, channel=channel or "")
+
+    cached = await load_chart_text(report_id)
+    if cached is not None:
+        log.debug("chart_text_cache_hit", report_id=report_id)
+        return cached
+
+    fresh = await digitize_charts(images, report_id=report_id, channel=channel or "")
+    try:
+        await save_chart_text(report_id, fresh)
+    except Exception as e:
+        log.warning("get_or_digitize_save_failed", report_id=report_id, error=str(e))
+    return fresh
