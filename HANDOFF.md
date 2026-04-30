@@ -1,106 +1,95 @@
-# Handoff — 2026-03-31 세션
+# HANDOFF — 다음 세션 시작점 (2026-04-29)
 
-## 현재 상태
+## 이번 세션 완료 사항
 
-### 프로세스
-| 작업 | 상태 | 비고 |
-|---|---|---|
-| `backfill_dates` dry-run | 돌고 있음 (606/4,384) | Gemini Flash-Lite, ~3시간 예상 |
-| reverse backfill | 시작 예정 | `--reverse --limit 15000` |
-| analysis | 멈춤 | dates 끝나고 재시작 |
-| download_pending | 완료 | s2a_done 0건, pdf_failed retry 완료 |
+### 1. `parser/image_extractor.py` — 다중 시그널 필터링 도입
+- 단일 텍스트 커버리지 임계값 → **다중 시그널 스코어링** 교체
+- 시그널: 벡터 밀도(+2), 큰 임베드 이미지(+2), 키워드(+3), 섹션 헤더 키워드(+2), 인접 페이지(+1)
+- **threshold ≥ 3** 페이지만 chart_digitize 호출
+- 표지/면책 hard skip (total > 3페이지 시), 3페이지 이하는 면제
+- dry-run 30건 검증: 통과율 51%, 리포트당 평균 6.3장
 
-### DB 현황 (2026-03-31 기준)
-| pipeline_status | 건수 |
+### 2. `run_analysis.py:66` — chart_digitize 화이트리스트 확대
+```python
+# Before
+_QUANT_REPORT_TYPES = {"퀀트"}
+# After
+_CHART_DIGITIZE_TYPES = {"퀀트", "기업분석", "실적리뷰", "산업분석"}
+```
+
+### 3. `scripts/dryrun_image_filter.py` 신규
+- 실제 API 호출 없이 페이지별 시그널/점수 dry-run 확인용
+- `--diverse --sample 30` 옵션으로 broker×report_type 다양성 샘플링
+
+### 4. chart_digitize 산출물 DB 영속화 (Task A 완료)
+- `db/migrations/versions/h2c3d4e5f6a7_add_report_chart_text.py` — alembic migration 작성
+- `storage/chart_text_repo.py` — `load_chart_text()` / `save_chart_text()` 구현
+- `parser/chart_digitizer.py` — `get_or_digitize_charts()` 캐시 패턴 추가
+- `run_analysis.py` — chart_digitize 호출부를 `get_or_digitize_charts`로 교체
+- Railway DB 마이그레이션 적용 완료 (`alembic current`: h2c3d4e5f6a7)
+
+---
+
+## 다음 세션 구현 목표
+
+### A (최우선): 기존 24,895건 chart_digitize 백필
+- `scripts/run_chart_prefetch.py` 신규 작성
+- `pipeline_status = 'done'` + chart_text 없는 리포트 대상
+- `_CHART_DIGITIZE_TYPES`에 해당하는 report_type만
+- concurrency 조절 (Gemini semaphore 5 유지)
+- 예상 비용: ~$52 (7만원), 시간: 수 시간
+
+---
+
+## 아키텍처 결정사항 (확정)
+
+| 항목 | 결정 |
 |---|---|
-| pdf_done | 12,002 |
-| analysis_pending | 16,840 |
-| pdf_failed | 13,927 |
-| done | 1,407 |
-| new | 2,289 |
-| s2a_done | 0 |
+| chart pipeline 위치 | listener/backfill 변경 없음, analysis 내 캐시 패턴 |
+| pipeline status 변경 | 없음 (chart_done 단계 추가 불필요) |
+| Layer2 재추출 방식 | DB에서 chart_text 읽어서 기존 flow 유지 |
+| 백필 방식 | 별도 `run_chart_prefetch.py` 1회 실행 |
+| opendataloader-pdf | 기각 (base 표 구조 품질 실측 미달, 한국 리포트 특화 미검증) |
+| 로컬 VLM | 기각 (내장 GPU 0.5GB, 7B+ 모델 필요) |
+| Gemini Flash-Lite | 유지 (`config/settings.py:60`, `.env:33`) |
 
-## 다음 해야 할 것
+---
 
-### 1. backfill_dates 완료 후
-```bash
-# dry-run 결과 확인 (보정 대상 건수, 샘플)
-# 문제 없으면 apply
-python scripts/backfill_dates.py --apply
+## Layer2 v2 스키마 (보류 — A/B 완료 후)
+
+다음 단계로 예정되어 있으나 이번 세션에서 구현 안 함:
+```json
+{
+  "valuation": {"method":"PBR","applied_multiple":0.31,"base_metric":"2026F BPS","target_year":"2026F","justification_text":"..."},
+  "catalysts": [{"event":"1Q26 어닝콜","expected_date":"2026-05-15","importance":"high"}],
+  "monitoring_points": [{"indicator":"철근 유통가격","source":"한국철강협회","direction_for_thesis":"up"}]
+}
 ```
+신규 리포트부터 적용, 기존 24,895건 재추출은 정형 쿼리 수요 확인 후 결정.
 
-### 2. analysis 재시작
-```powershell
-$env:PYTHONIOENCODING = "utf-8"
-.venv\Scripts\python.exe run_analysis.py --concurrency 8 --batch-size 100 2>&1 | Tee-Object -FilePath analysis_2.log
-```
-- pdf_done 12,002 + analysis_pending 16,840 = ~28,842건 대상
-- streaming batch로 100건마다 Layer2 제출 — 중간 죽어도 손실 최소
-- Flash-Lite 모델 사용 중 (비용 ~85% 절감)
+---
 
-### 3. reverse backfill
-```powershell
-.venv\Scripts\python.exe run_backfill.py --reverse --limit 15000 2>&1 | Tee-Object -FilePath backfill_reverse.log
-```
-- 최신 메시지부터 역순 수집
-- `reverse_min_id`로 진행 추적 (여러 번 나눠 실행 가능)
-- analysis와 동시 실행 가능 (Telegram vs Gemini/Anthropic)
+## 현재 비용 구조 (참고)
 
-### 4. forward backfill (나중에)
-```powershell
-.venv\Scripts\python.exe run_backfill.py --limit 15000 2>&1 | Tee-Object -FilePath backfill.log
-```
-- Phase 0.5로 기존 건 빠르게 skip
-- reverse와 forward가 가운데서 만나면 미처리 구간 0
-
-### 5. new 건 S2a 분류 (미구현)
-- `new` 2,289건은 S2a 분류 안 된 상태
-- `raw_text`로 Telegram 재접근 없이 분류 가능
-- 별도 스크립트 필요 (미구현)
-
-## 동시 실행 규칙
-| 조합 | 가능? | 이유 |
+| 단계 | 모델 | 단가/리포트 |
 |---|---|---|
-| analysis + backfill | O | Telegram vs Gemini/Anthropic |
-| analysis + download_pending | O | DB만 겹침, pool_pre_ping으로 안정 |
-| backfill + download_pending | X | Telegram 세션 충돌 |
-| analysis + backfill_dates | X | 둘 다 Gemini API 사용 |
+| key_data | Gemini Flash-Lite | ~$0.001 |
+| chart_digitize | Gemini Flash-Lite | ~$0.002 (avg 6.3장) |
+| Layer2 | Sonnet Batch | ~$0.052 |
+| **합계** | | **~$0.055** |
 
-## 이번 세션 주요 변경사항
+백필 24,895건 chart_digitize: **~$52 (7만원)**
+운영 일 100건: **~$6/월**
 
-### 비용 관련
-- `gemini-2.5-flash` → `gemini-2.5-flash-lite` (settings.py)
-- 가격 테이블 수정 (models.py): Flash $0.30/$2.50, Flash-Lite $0.10/$0.40
-- 품질 메트릭 로깅: `q_chars`, `q_table_rows`, `q_digits` (chart_digitizer.py)
+---
 
-### Pipeline 안정성
-- `_REPORT_TIMEOUT`: 300초 → 1800초 (run_analysis.py)
-- `pool_pre_ping=True`, `pool_recycle=300` (session.py)
-- key_data_extractor: Gemini client 캐싱 + `to_thread` 이벤트루프 블로킹 제거
-- markdown_converter: pypdf fallback에 60초 timeout
-- backfill: `finally`에서 `last_message_id` 항상 업데이트
-- analysis: timeout/error시 `analysis_failed` 마킹
-- `pdf_fail_reason` truncate to 50 chars (report_repo.py)
+## 관련 파일 위치
 
-### 구조 변경
-- `run_analysis.py`: streaming batch (Phase 1 중 N건마다 Layer2 제출)
-- `run_download_pending.py`: s2a_done/pdf_failed PDF 직접 다운로드
-- `collector/backfill.py`: Phase 0.5 (기존 건 skip), --reverse 모드
-- `channels.reverse_min_id` 컬럼 추가 (alembic migration)
-- `key_data.date` → `report_date` 반영 (run_analysis.py, backfill.py)
-- `scripts/backfill_dates.py`: 기존 잘못된 날짜 보정
-- `scripts/backfill_titles.py`: stream() → async for 수정
-
-### 코드 품질 (simplify 리뷰)
-- TME 패턴 중복 제거 → `parser.generic.PATTERN_TME_MSG` import
-- `_ReportCheck`/`_Report` 중복 import → `ReportModel` 사용
-- `_SKIP_STATUSES` 모듈 레벨 상수
-- CSV 작성 `csv.writer` 사용
-- results dict → `Counter`
-- DB 세션 통합 (2개→1개)
-
-## 미해결 이슈
-- `new` 2,289건 S2a 분류 스크립트 미구현
-- 이미지 사전 필터링 (N/A 20% 절감) — 유료 전환 후 재테스트 필요
-- chart_digitizer 테스트 2건 기존 실패 (TestChartDigitizerGateIntegration)
-- untracked 파일 정리: `db_check.py` (credential 하드코딩), `test_*.py` 임시 스크립트, csv 파일
+| 파일 | 역할 |
+|---|---|
+| `parser/image_extractor.py` | 다중 시그널 필터링 (이번 세션 변경) |
+| `parser/chart_digitizer.py` | Gemini chart_digitize 로직 |
+| `run_analysis.py:66` | `_CHART_DIGITIZE_TYPES` 화이트리스트 |
+| `scripts/dryrun_image_filter.py` | 필터 dry-run 도구 |
+| `db/models.py` | DB 모델 (report_chart_text 추가 필요) |
+| `storage/llm_usage_repo.py` | LLM 비용 기록 패턴 참고용 |
