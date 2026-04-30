@@ -45,7 +45,7 @@ from db.session import AsyncSessionLocal
 from db.models import Report as ReportModel
 from parser.markdown_converter import convert_pdf_to_markdown
 from parser.image_extractor import extract_images_from_pdf
-from parser.chart_digitizer import digitize_charts
+from parser.chart_digitizer import get_or_digitize_charts
 from parser.key_data_extractor import extract_key_data
 from parser.layer2_extractor import (
     build_user_content, build_batch_request, run_layer2_batch, submit_layer2_batch, make_layer2_result,
@@ -62,8 +62,9 @@ _CONCURRENCY = 4  # Phase 1 동시 처리 건수
 _BATCH_THRESHOLD = 100  # Layer2 Batch 제출 임계값
 _MAX_CONCURRENT_BATCHES = 3  # 동시에 폴링 중인 Batch 최대 수
 
-# 퀀트 리포트 타입 (차트 수치화 대상)
-_QUANT_REPORT_TYPES = {"퀀트"}
+# 차트 수치화 대상 리포트 타입
+# (image_extractor의 다중 시그널 필터로 false positive 통제됨)
+_CHART_DIGITIZE_TYPES = {"퀀트", "기업분석", "실적리뷰", "산업분석"}
 
 # 로그 파일 경로
 _MARKDOWN_FAILURE_LOG = "logs/markdown_failures.csv"
@@ -263,7 +264,7 @@ async def process_single(report: ReportModel, chart_mode: str = "auto") -> dict:
     key_data_report_type = key_data.report_type if key_data else None
     _should_digitize = (
         chart_mode == "enabled" or
-        (chart_mode == "auto" and key_data_report_type in _QUANT_REPORT_TYPES)
+        (chart_mode == "auto" and key_data_report_type in _CHART_DIGITIZE_TYPES)
     )
 
     _step_t = time.monotonic()
@@ -273,7 +274,7 @@ async def process_single(report: ReportModel, chart_mode: str = "auto") -> dict:
         result["steps"]["images"] = f"{len(images)} extracted"
         if images:
             if _should_digitize:
-                dig_result = await digitize_charts(images, report_id=report.id, channel=channel)
+                dig_result = await get_or_digitize_charts(images, report_id=report.id, channel=channel)
                 if dig_result.texts:
                     chart_texts = dig_result.texts
                 result["steps"]["charts"] = f"{dig_result.success_count}/{len(images)} digitized"

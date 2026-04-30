@@ -77,7 +77,7 @@ class TestProcessSingleTimingLogs:
              patch("run_analysis.convert_pdf_to_markdown", new_callable=AsyncMock,
                    return_value=("# markdown content with enough text " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock, return_value=[]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock), \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock), \
              patch("run_analysis.build_user_content", return_value=("content", False, 100)), \
              patch("run_analysis.log") as mock_log:
 
@@ -114,7 +114,7 @@ class TestProcessSingleTimingLogs:
              patch("run_analysis.convert_pdf_to_markdown", new_callable=AsyncMock,
                    return_value=("# markdown content with enough text " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock, return_value=[]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock), \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock), \
              patch("run_analysis.build_user_content", return_value=("content", False, 100)), \
              patch("run_analysis.log") as mock_log:
 

@@ -91,11 +91,11 @@ class TestAutoModeNonQuant:
     """Auto mode: non-퀀트 reports skip chart digitization."""
 
     @pytest.mark.parametrize("report_type", [
-        "기업분석", "산업분석", "매크로", "실적리뷰", "주간전략", "기타",
+        "매크로", "주간전략", "기타",
     ])
     @pytest.mark.asyncio
     async def test_non_quant_skips_digitize(self, report_type):
-        """digitize_charts must NOT be called for non-퀀트 in auto mode."""
+        """digitize_charts must NOT be called for non-차트수치화대상 in auto mode."""
         report = _make_report_model()
         fake_images = [MagicMock(), MagicMock()]
 
@@ -109,7 +109,7 @@ class TestAutoModeNonQuant:
                    return_value=("# Markdown content " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=fake_images), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock) as mock_dig, \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock) as mock_dig, \
              patch("run_analysis.build_user_content", return_value=([], False, 500)):
             ms.pdf_base_path = Path("/fake")
             # Make pdf path exist
@@ -135,12 +135,12 @@ class TestAutoModeNonQuant:
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
              patch("run_analysis.update_pipeline_status", new_callable=AsyncMock), \
              patch("run_analysis.extract_key_data", new_callable=AsyncMock,
-                   return_value=_make_key_data("기업분석")), \
+                   return_value=_make_key_data("매크로")), \
              patch("run_analysis.convert_pdf_to_markdown", new_callable=AsyncMock,
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=[MagicMock()]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock), \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock), \
              patch("run_analysis.build_user_content",
                    side_effect=fake_build_user_content):
             ms.pdf_base_path = Path("/fake")
@@ -165,12 +165,12 @@ class TestAutoModeNonQuant:
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
              patch("run_analysis.update_pipeline_status", new_callable=AsyncMock), \
              patch("run_analysis.extract_key_data", new_callable=AsyncMock,
-                   return_value=_make_key_data("산업분석")), \
+                   return_value=_make_key_data("주간전략")), \
              patch("run_analysis.convert_pdf_to_markdown", new_callable=AsyncMock,
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=[MagicMock()]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock), \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock), \
              patch("run_analysis.build_user_content", return_value=([], False, 500)), \
              patch("run_analysis.log") as mock_log:
             ms.pdf_base_path = Path("/fake")
@@ -182,7 +182,7 @@ class TestAutoModeNonQuant:
         skip_calls = [(e, kw) for e, kw in log_calls if e == "charts_skipped"]
         assert len(skip_calls) == 1
         _, kw = skip_calls[0]
-        assert kw["report_type"] == "산업분석"
+        assert kw["report_type"] == "주간전략"
         assert kw["reason"] == "non_quant"
         assert kw["report_id"] == report.id
 
@@ -207,7 +207,7 @@ class TestAutoModeQuant:
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=fake_images), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock,
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock,
                    return_value=dig_result) as mock_dig, \
              patch("run_analysis.build_user_content", return_value=([], False, 500)):
             ms.pdf_base_path = Path("/fake")
@@ -238,7 +238,7 @@ class TestAutoModeQuant:
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=[MagicMock()]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock,
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock,
                    return_value=dig_result), \
              patch("run_analysis.build_user_content", return_value=([], False, 500)), \
              patch("run_analysis.log") as mock_log:
@@ -278,7 +278,7 @@ class TestEnabledMode:
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=[MagicMock()]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock,
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock,
                    return_value=dig_result) as mock_dig, \
              patch("run_analysis.build_user_content", return_value=([], False, 500)):
             ms.pdf_base_path = Path("/fake")
@@ -315,7 +315,7 @@ class TestDisabledMode:
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=[MagicMock()]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock) as mock_dig, \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock) as mock_dig, \
              patch("run_analysis.build_user_content", return_value=([], False, 500)):
             ms.pdf_base_path = Path("/fake")
             with patch.object(Path, "exists", return_value=True):
@@ -340,7 +340,7 @@ class TestDisabledMode:
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=[MagicMock()]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock) as mock_dig, \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock) as mock_dig, \
              patch("run_analysis.build_user_content", return_value=([], False, 500)):
             ms.pdf_base_path = Path("/fake")
             with patch.object(Path, "exists", return_value=True):
@@ -372,7 +372,7 @@ class TestKeyDataNoneSkipsCharts:
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=[MagicMock()]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock) as mock_dig, \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock) as mock_dig, \
              patch("run_analysis.build_user_content", return_value=([], False, 500)):
             ms.pdf_base_path = Path("/fake")
             with patch.object(Path, "exists", return_value=True):
@@ -401,7 +401,7 @@ class TestKeyDataNoneSkipsCharts:
                    return_value=("# Markdown " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock,
                    return_value=[MagicMock()]), \
-             patch("run_analysis.digitize_charts", new_callable=AsyncMock), \
+             patch("run_analysis.get_or_digitize_charts", new_callable=AsyncMock), \
              patch("run_analysis.build_user_content", return_value=([], False, 500)), \
              patch("run_analysis.log") as mock_log:
             ms.pdf_base_path = Path("/fake")

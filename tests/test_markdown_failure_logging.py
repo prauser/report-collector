@@ -154,7 +154,7 @@ class TestProcessSingleMarkdownFailure:
              patch("run_analysis.extract_key_data", AsyncMock(return_value=None)), \
              patch("run_analysis.convert_pdf_to_markdown", AsyncMock(return_value=(None, "pymupdf"))), \
              patch("run_analysis.extract_images_from_pdf", AsyncMock(return_value=[])), \
-             patch("run_analysis.digitize_charts", AsyncMock()), \
+             patch("run_analysis.get_or_digitize_charts", AsyncMock()), \
              patch("run_analysis._log_markdown_failure") as mock_log_failure:
 
             from run_analysis import process_single
@@ -199,7 +199,7 @@ class TestProcessSingleMarkdownFailure:
              patch("run_analysis.extract_key_data", AsyncMock(return_value=None)), \
              patch("run_analysis.convert_pdf_to_markdown", AsyncMock(return_value=(short_markdown, "pymupdf"))), \
              patch("run_analysis.extract_images_from_pdf", AsyncMock(return_value=[])), \
-             patch("run_analysis.digitize_charts", AsyncMock()), \
+             patch("run_analysis.get_or_digitize_charts", AsyncMock()), \
              patch("run_analysis._log_markdown_failure") as mock_log_failure:
 
             from run_analysis import process_single
@@ -237,7 +237,7 @@ class TestProcessSingleMarkdownFailure:
              patch("run_analysis.extract_key_data", AsyncMock(return_value=None)), \
              patch("run_analysis.convert_pdf_to_markdown", AsyncMock(return_value=(good_markdown, "pymupdf"))), \
              patch("run_analysis.extract_images_from_pdf", AsyncMock(return_value=[])), \
-             patch("run_analysis.digitize_charts", AsyncMock()), \
+             patch("run_analysis.get_or_digitize_charts", AsyncMock()), \
              patch("run_analysis.build_user_content", return_value=([], False, 300)), \
              patch("run_analysis._log_markdown_failure") as mock_log_failure:
 
@@ -267,7 +267,7 @@ class TestProcessSingleMarkdownFailure:
              patch("run_analysis.extract_key_data", AsyncMock(return_value=None)), \
              patch("run_analysis.convert_pdf_to_markdown", AsyncMock(return_value=(None, "pymupdf"))), \
              patch("run_analysis.extract_images_from_pdf", AsyncMock(return_value=[])), \
-             patch("run_analysis.digitize_charts", AsyncMock()), \
+             patch("run_analysis.get_or_digitize_charts", AsyncMock()), \
              patch("run_analysis._log_markdown_failure"):
 
             from run_analysis import process_single
@@ -297,7 +297,7 @@ class TestProcessSingleMarkdownFailure:
              patch("run_analysis.extract_key_data", AsyncMock(return_value=None)), \
              patch("run_analysis.convert_pdf_to_markdown", AsyncMock(return_value=(short_markdown, "pymupdf"))), \
              patch("run_analysis.extract_images_from_pdf", AsyncMock(return_value=[])), \
-             patch("run_analysis.digitize_charts", AsyncMock()), \
+             patch("run_analysis.get_or_digitize_charts", AsyncMock()), \
              patch("run_analysis._log_markdown_failure"):
 
             from run_analysis import process_single
