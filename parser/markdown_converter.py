@@ -59,7 +59,7 @@ async def convert_pdf_to_markdown(pdf_path: Path) -> tuple[str | None, str]:
         return await _convert_pymupdf4llm(pdf_path), "pymupdf4llm"
 
 
-_MD_CONVERT_TIMEOUT = 120  # 최대 57초 × ~2배 여유
+_MD_CONVERT_TIMEOUT = 300  # workers=4 동시 실행 시 50~70p PDF가 120s 초과해 실패하던 케이스 대응
 
 
 def _pymupdf4llm_sync(pdf_path: str) -> str | None:
