@@ -183,22 +183,27 @@ class TestAutoModeNonQuant:
         assert len(skip_calls) == 1
         _, kw = skip_calls[0]
         assert kw["report_type"] == "주간전략"
-        assert kw["reason"] == "non_quant"
+        assert kw["reason"] == "chart_digitize_disabled"
         assert kw["report_id"] == report.id
 
 
 class TestAutoModeQuant:
-    """Auto mode: 퀀트 reports run chart digitization."""
+    """Auto mode + whitelist 활성: 해당 타입은 chart digitization 수행.
+
+    2026-05-04 chart_digitize 비활성화 후에도 화이트리스트 복원 시 동작하는지 검증.
+    각 테스트가 _CHART_DIGITIZE_TYPES를 임시로 채워 확인한다.
+    """
 
     @pytest.mark.asyncio
     async def test_quant_runs_digitize(self):
-        """digitize_charts IS called for 퀀트 in auto mode."""
+        """digitize_charts IS called for 퀀트 in auto mode (whitelist 복원 가정)."""
         report = _make_report_model()
         fake_images = [MagicMock(), MagicMock()]
         dig_result = _make_dig_result()
 
         sess = _mock_session()
-        with patch("run_analysis.settings") as ms, \
+        with patch("run_analysis._CHART_DIGITIZE_TYPES", {"퀀트"}), \
+             patch("run_analysis.settings") as ms, \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
              patch("run_analysis.update_pipeline_status", new_callable=AsyncMock), \
              patch("run_analysis.extract_key_data", new_callable=AsyncMock,
@@ -220,7 +225,7 @@ class TestAutoModeQuant:
 
     @pytest.mark.asyncio
     async def test_quant_no_charts_skipped_log(self):
-        """charts_skipped must NOT be logged for 퀀트 in auto mode."""
+        """charts_skipped must NOT be logged for 퀀트 in auto mode (whitelist 복원 가정)."""
         report = _make_report_model()
         dig_result = _make_dig_result()
         log_calls = []
@@ -229,7 +234,8 @@ class TestAutoModeQuant:
             log_calls.append((event, kwargs))
 
         sess = _mock_session()
-        with patch("run_analysis.settings") as ms, \
+        with patch("run_analysis._CHART_DIGITIZE_TYPES", {"퀀트"}), \
+             patch("run_analysis.settings") as ms, \
              patch("run_analysis.AsyncSessionLocal", return_value=sess), \
              patch("run_analysis.update_pipeline_status", new_callable=AsyncMock), \
              patch("run_analysis.extract_key_data", new_callable=AsyncMock,
@@ -414,7 +420,7 @@ class TestKeyDataNoneSkipsCharts:
         assert len(skip_calls) == 1
         _, kw = skip_calls[0]
         assert kw["report_type"] is None
-        assert kw["reason"] == "non_quant"
+        assert kw["reason"] == "chart_digitize_disabled"
 
 
 # ---------------------------------------------------------------------------

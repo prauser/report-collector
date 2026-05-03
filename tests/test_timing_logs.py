@@ -65,15 +65,22 @@ class TestProcessSingleTimingLogs:
 
     @pytest.mark.asyncio
     async def test_all_steps_logged_with_duration_s(self):
-        """Each step (key_data, markdown, images_charts) is logged with duration_s >= 0."""
+        """Each pipeline step is logged with duration_s >= 0.
+
+        chart_digitize 활성 시 (whitelist에 매칭) images_charts step도 포함.
+        """
         from run_analysis import process_single
 
         report = _make_report(1)
+        # chart_digitize 활성화 위해 whitelist 매칭 + key_data report_type 채움
+        kd = MagicMock()
+        kd.report_type = "퀀트"
 
-        with patch("run_analysis.settings") as mock_settings, \
+        with patch("run_analysis._CHART_DIGITIZE_TYPES", {"퀀트"}), \
+             patch("run_analysis.settings") as mock_settings, \
              patch("run_analysis.update_pipeline_status", new_callable=AsyncMock), \
              patch("run_analysis.AsyncSessionLocal", return_value=_mock_session()), \
-             patch("run_analysis.extract_key_data", new_callable=AsyncMock, return_value=None), \
+             patch("run_analysis.extract_key_data", new_callable=AsyncMock, return_value=kd), \
              patch("run_analysis.convert_pdf_to_markdown", new_callable=AsyncMock,
                    return_value=("# markdown content with enough text " * 20, "pymupdf4llm")), \
              patch("run_analysis.extract_images_from_pdf", new_callable=AsyncMock, return_value=[]), \

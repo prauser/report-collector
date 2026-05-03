@@ -63,8 +63,9 @@ _BATCH_THRESHOLD = 100  # Layer2 Batch 제출 임계값
 _MAX_CONCURRENT_BATCHES = 3  # 동시에 폴링 중인 Batch 최대 수
 
 # 차트 수치화 대상 리포트 타입
-# (image_extractor의 다중 시그널 필터로 false positive 통제됨)
-_CHART_DIGITIZE_TYPES = {"퀀트", "기업분석", "실적리뷰", "산업분석"}
+# 2026-05-04: 효용 미입증으로 비활성화 (chart_only grounding 0.79%, 측정 결과)
+# 재활성화 시: 타입 추가 (예: {"퀀트", "기업분석", "실적리뷰", "산업분석"})
+_CHART_DIGITIZE_TYPES: set[str] = set()
 
 # 로그 파일 경로
 _MARKDOWN_FAILURE_LOG = "logs/markdown_failures.csv"
@@ -259,6 +260,7 @@ async def process_single(report: ReportModel, chart_mode: str = "auto") -> dict:
     images = []
     dig_result = None
     chart_texts = None
+    n_images = 0
 
     # 차트 수치화 여부 결정
     key_data_report_type = key_data.report_type if key_data else None
@@ -267,34 +269,36 @@ async def process_single(report: ReportModel, chart_mode: str = "auto") -> dict:
         (chart_mode == "auto" and key_data_report_type in _CHART_DIGITIZE_TYPES)
     )
 
-    _step_t = time.monotonic()
-    log.info("step_start", report_id=report.id, step="images")
-    try:
-        images = await extract_images_from_pdf(abs_path)
-        result["steps"]["images"] = f"{len(images)} extracted"
-        if images:
-            if _should_digitize:
+    if _should_digitize:
+        _step_t = time.monotonic()
+        log.info("step_start", report_id=report.id, step="images")
+        try:
+            images = await extract_images_from_pdf(abs_path)
+            result["steps"]["images"] = f"{len(images)} extracted"
+            if images:
                 dig_result = await get_or_digitize_charts(images, report_id=report.id, channel=channel)
                 if dig_result.texts:
                     chart_texts = dig_result.texts
                 result["steps"]["charts"] = f"{dig_result.success_count}/{len(images)} digitized"
             else:
-                log.info("charts_skipped", report_id=report.id,
-                         report_type=key_data_report_type, reason="non_quant")
-                result["steps"]["charts"] = "skipped"
-        else:
-            result["steps"]["charts"] = "no_images"
-    except Exception as e:
-        log.warning("image_chart_error", report_id=report.id, error=str(e))
-        result["steps"]["images"] = f"error: {e}"
+                result["steps"]["charts"] = "no_images"
+        except Exception as e:
+            log.warning("image_chart_error", report_id=report.id, error=str(e))
+            result["steps"]["images"] = f"error: {e}"
+            result["steps"]["charts"] = "skipped"
+        finally:
+            # 이미지 바이트 즉시 해제 (건당 수 MB)
+            n_images = len(images)
+            del images
+        log.info("step_done", report_id=report.id, step="images_charts",
+                 duration_s=round(time.monotonic() - _step_t, 2))
+        _log_memory("after_images", report_id=report.id)
+    else:
+        # chart_digitize 비활성화 시 이미지 추출도 건너뜀 (CPU 절약)
+        log.info("charts_skipped", report_id=report.id,
+                 report_type=key_data_report_type, reason="chart_digitize_disabled")
+        result["steps"]["images"] = "skipped"
         result["steps"]["charts"] = "skipped"
-    finally:
-        # 이미지 바이트 즉시 해제 (건당 수 MB)
-        n_images = len(images)
-        del images
-    log.info("step_done", report_id=report.id, step="images_charts",
-             duration_s=round(time.monotonic() - _step_t, 2))
-    _log_memory("after_images", report_id=report.id)
 
     # 품질 게이트: 마크다운이 너무 짧으면 skip
     _MIN_MARKDOWN_CHARS = 200
